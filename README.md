@@ -3,20 +3,20 @@
 <h3>Demystifying Reinforcement Learning in Agentic Reasoning</h3></div>
 
 <p align="center">
-  <a href="https://arxiv.org/abs/2509.06949">
+  <a href="https://arxiv.org/abs/2510.11701">
     <img
-      src="https://img.shields.io/badge/Paper-Arxiv-red?logo=arxiv&logoColor=red"
+      src="https://img.shields.io/badge/Paper-Arxiv%202510.11701-red?logo=arxiv&logoColor=red"
       alt="Paper on arXiv"
     />
-  <a href="https://huggingface.co/datasets/Gen-Verse/Open-AgentRL-30K">
+  <a href="https://huggingface.co/collections/Gen-Verse/open-agentrl-68eda4c05755ca5a8c663656">
     <img 
-        src="https://img.shields.io/badge/Datasets-Hugging%20Face%20Data-orange?logo=huggingface&logoColor=yellow" 
-        alt="Datasets on Hugging Face"
+        src="https://img.shields.io/badge/Datasets-Agent%20RL%20Datasets-orange?logo=huggingface&logoColor=yellow" 
+        alt="Datasets for Agent RL"
     />
   </a>
   <a href="https://huggingface.co/Gen-Verse/DemyAgent-4B">
     <img 
-        src="https://img.shields.io/badge/DemyAgent%204B-Hugging%20Face%20Model-FFCC00?logo=huggingface&logoColor=yellow" 
+        src="https://img.shields.io/badge/DemyAgent%204B-DemyAgent%204B%20Model-FFCC00?logo=huggingface&logoColor=yellow" 
         alt="DemyAgent-4B on Hugging Face"
     />
   </a>
@@ -32,14 +32,14 @@ In this work, we systematically investigate three dimensions of agentic RL: **da
 * Exploration-friendly techniques like reward clipping and entropy maintenance boost training efficiency; 
 * Deliberative reasoning with selective tool calls surpasses frequent invocation or verbose self-reasoning. 
 
-We also contribute high-quality SFT and RL datasets, demonstrating that **simple recipes enable even 4B models to outperform 32B models** on challenging benchmarks including AIME2024/2025, GPQA-Diamond, and LiveCodeBench-v6.
+We also contribute [high-quality SFT and RL datasets](https://huggingface.co/collections/Gen-Verse/open-agentrl-68eda4c05755ca5a8c663656), demonstrating that **simple recipes enable even [4B models](https://huggingface.co/Gen-Verse/DemyAgent-4B) to outperform 32B models** on challenging benchmarks including AIME2024/2025, GPQA-Diamond, and LiveCodeBench-v6.
 
 ## 🚩 New Updates
 
 - **[2025.10]** We fully open-source our work, including:
   - Training code for both SFT and RL stages
   - High-quality SFT dataset (3K samples) and RL dataset (30K samples)
-  - Model checkpoints: SFT models (Qwen2.5-7B-RA-SFT, Qwen3-4B-RA-SFT) and RL-trained model (DemyAgent-4B)
+  - Model checkpoints: SFT models (Qwen2.5-7B-RA-SFT, Qwen3-4B-RA-SFT) and RL-trained model ([DemyAgent-4B](https://huggingface.co/Gen-Verse/DemyAgent-4B))
   - Evaluation Scripts for our models
 
 ## 📦 Dataset
@@ -177,10 +177,10 @@ As demonstrated in the table above, despite having only 4B parameters, **DemyAge
 
 ```bibtex
 @article{yu2025demystify,
-  author    = {Zhaochen Yu and Ling Yang and Jiaru Zou and Shuicheng Yan and Mengdi Wang},
-  title     = {Demystifying Reinforcement Learning in Agentic Reasoning},
-  year      = {2025},
-  journal   = {arXiv preprint},
+  title={Demystifying Reinforcement Learning in Agentic Reasoning},
+  author={Yu, Zhaochen and Yang, Ling and Zou, Jiaru and Yan, Shuicheng and Wang, Mengdi},
+  journal={arXiv preprint arXiv:2510.11701},
+  year={2025}
 }
 ```
 
