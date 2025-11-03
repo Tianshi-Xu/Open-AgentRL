@@ -45,7 +45,13 @@ def main(config: DictConfig):
         config.model.partial_pretrain = os.path.join(amlt_data_dir, original_model_path)
         print(f"Updated model path: {original_model_path} -> {config.model.partial_pretrain}")
     
-    # 3. Run the original SFT training
+    # 3. Update the output directory
+    amlt_output_dir = os.environ.get("AMLT_OUTPUT_DIR", "")
+    if amlt_output_dir and not config.trainer.default_local_dir.startswith("/"):
+        config.trainer.default_local_dir = os.path.join(amlt_output_dir, config.trainer.default_local_dir)
+        print(f"Updated output directory: {config.trainer.default_local_dir}")
+    
+    # 4. Run the original SFT training
     run_sft(config)
 
 

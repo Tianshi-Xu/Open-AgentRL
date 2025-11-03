@@ -14,8 +14,7 @@ pip install --no-cache-dir "vllm==0.8.5.post1" "torch==2.6.0" "torchvision==0.21
 echo "2. install basic packages"
 pip install "transformers[hf_xet]>=4.51.0" accelerate datasets peft hf-transfer \
     "numpy<2.0.0" "pyarrow>=15.0.0" pandas \
-    ray[default] codetiming hydra-core pylatexenc qwen-vl-utils wandb dill pybind11 liger-kernel mathruler \
-    pytest py-spy pyext pre-commit ruff tensorboard 
+    ray[default] codetiming hydra-core qwen-vl-utils wandb dill pybind11 liger-kernel tensorboard 
 
 pip install "nvidia-ml-py>=12.560.30" "fastapi[standard]>=0.115.0" "optree>=0.13.0" "pydantic>=2.9" "grpcio>=1.62.1"
 
@@ -31,7 +30,7 @@ pip install --no-cache-dir flash_attn-2.7.4.post1+cu12torch2.6cxx11abiFALSE-cp31
 wget -nv https://github.com/flashinfer-ai/flashinfer/releases/download/v0.2.2.post1/flashinfer_python-0.2.2.post1+cu124torch2.6-cp38-abi3-linux_x86_64.whl && \
 pip install --no-cache-dir flashinfer_python-0.2.2.post1+cu124torch2.6-cp38-abi3-linux_x86_64.whl
 
-
+### for now, we don't need megatron
 if [ $USE_MEGATRON -eq 1 ]; then
     echo "4. install TransformerEngine and Megatron"
     echo "Notice that TransformerEngine installation can take very long time, please be patient"
@@ -54,4 +53,6 @@ if [ $USE_MEGATRON -eq 1 ]; then
     pip install nvidia-cudnn-cu12==9.8.0.87
 fi
 
+pip install -e .[vllm]
 echo "Successfully installed all packages"
+

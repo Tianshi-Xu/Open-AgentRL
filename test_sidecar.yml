@@ -1,0 +1,38 @@
+description: test-sidecar
+
+target:
+  service: sing
+  workspace_name: srgxws
+  name: palisades33
+
+environment:
+  image: amlt-sing/acpt-torch2.7.1-py3.10-cuda12.6-ubuntu22.04
+  setup:
+  - sudo apt update
+  - sudo apt install curl
+
+code:
+  local_dir: $CONFIG_DIR/test_sidecar
+
+jobs:
+- name: test-sidecar
+  sku: 32C1
+  identity: managed
+  priority: high
+  submit_args:
+    env:
+      NCCL_DEBUG: "ERROR"
+      _AZUREML_SINGULARITY_JOB_UAI: /subscriptions/e546c811-2312-46e2-9fd0-c949c65da4d9/resourcegroups/srgx/providers/Microsoft.ManagedIdentity/userAssignedIdentities/srgxuai
+  command:
+  - bash test_sidecar/test.sh
+
+resources:
+  properties:
+    sidecars:
+      # 我们给 sidecar 起个名字
+      my_web_server:
+        # 使用一个最小的、公开的镜像
+        image: nginx:latest 
+        # nginx 默认在 80 端口上运行
+        ports:
+          - 80

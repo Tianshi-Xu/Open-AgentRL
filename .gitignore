@@ -1,7 +1,11 @@
 outputs/
 checkpoints/
+/checkpoint/
 wandb/
 verl.egg-info/
 *.whl
 dataset/
 __pycache__
+output/
+.venv/
+amlt/

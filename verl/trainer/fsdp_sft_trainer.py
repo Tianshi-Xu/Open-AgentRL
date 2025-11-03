@@ -122,6 +122,9 @@ class FSDPSFTTrainer:
 
         # Initialize resume-related variables
         self.resume_global_step = 0
+        
+        # Track best validation loss for best model saving
+        self.best_val_loss = float('inf')
 
         # build model
         self._build_model_optimizer()
@@ -522,12 +525,15 @@ class FSDPSFTTrainer:
                 loss /= self.device_mesh.size(0)
         return loss
 
-    def save_checkpoint(self, step):
+    def save_checkpoint(self, step, is_best=False):
         """Save checkpoint using FSDPCheckpointManager with improved tracking"""
         from verl.utils.fs import local_mkdir_safe
 
         # Determine checkpoint path
         local_global_step_folder = os.path.join(self.config.trainer.default_local_dir, f"global_step_{step}")
+
+        if is_best:
+            local_global_step_folder = os.path.join(self.config.trainer.default_local_dir, "best_model")
 
         if self.device_mesh.get_rank() == 0:
             print(f"Saving checkpoint to: {local_global_step_folder}")
@@ -756,7 +762,7 @@ class FSDPSFTTrainer:
                 is_last_step = global_step >= self.total_training_steps
                 is_valid_step = global_step % self.config.trainer.test_freq == 0
                 is_save_step = global_step % self.config.trainer.save_freq == 0
-
+                is_best = False
                 # early exit or validation step
                 if is_last_step or (self.config.trainer.test_freq > 0 and is_valid_step):
                     # Perform validation
@@ -767,15 +773,21 @@ class FSDPSFTTrainer:
                         )
                         val_loss = self.validation_step(val_data)
                         val_losses.append(val_loss)
+                    val_loss = torch.mean(torch.stack(val_losses))
+                    if val_loss < self.best_val_loss:
+                        is_best = True
+                        self.best_val_loss = val_loss.detach().item()
                     if rank == 0:
-                        val_loss = torch.mean(torch.stack(val_losses))
                         metric = {"val/loss": val_loss.detach().item()}
                         tracking.log(data=metric, step=global_step)
                         last_valid_metric = metric
                     torch.distributed.barrier()
-
+                if is_best:
+                    if rank == 0:
+                        print(f"New best validation loss: {self.best_val_loss}, saving to best_model")
+                    self.save_checkpoint(step=global_step, is_best=True)
                 if is_last_step or (self.config.trainer.save_freq > 0 and is_save_step):
-                    self.save_checkpoint(step=global_step)
+                    self.save_checkpoint(step=global_step, is_best=is_best)
 
                 if is_last_step:
                     if rank == 0:

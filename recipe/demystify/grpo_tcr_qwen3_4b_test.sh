@@ -48,17 +48,17 @@ overlong_penalty_factor=1.0
 
 max_turns=16
 max_prompt_length=2560
-max_response_length=20480
+max_response_length=4096
 actor_lr=1e-6
 
-train_batch_size=64
-ppo_mini_batch_size=16
-n_resp_per_prompt=16
-n_resp_per_prompt_val=32
+train_batch_size=1
+ppo_mini_batch_size=1
+n_resp_per_prompt=4
+n_resp_per_prompt_val=4
 
 # ================= perfomance =================
-infer_tp=4 # vllm
-train_sp=4 # train
+infer_tp=1 # vllm
+train_sp=1 # train
 offload=True
 
 actor_max_token_len_per_gpu=$(( (max_prompt_length + max_response_length) * 1 ))
@@ -135,7 +135,7 @@ python3 -m verl.trainer.main_ppo \
     trainer.logger=['console','wandb'] \
     trainer.project_name=$project_name \
     trainer.experiment_name=$experiment_name \
-    trainer.n_gpus_per_node=8 \
+    trainer.n_gpus_per_node=1 \
     trainer.val_before_train=True \
     trainer.log_val_generations=20 \
     trainer.nnodes=1 \
