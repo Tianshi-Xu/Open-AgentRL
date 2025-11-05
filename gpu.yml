@@ -1,0 +1,27 @@
+description: test_sidecar
+
+target:
+  service: sing
+  workspace_name: srgxws
+  name: palisades33
+
+environment:
+  image: amlt-sing/acpt-torch2.7.1-py3.10-cuda12.6-ubuntu22.04
+  setup:
+  - sudo apt update
+
+code:
+  local_dir: $CONFIG_DIR/test_sidecar
+
+jobs:
+- name: test-sidecar
+  sku: 1x40G8
+  identity: managed
+  priority: high
+  submit_args:
+    env:
+      NCCL_DEBUG: "ERROR"
+      _AZUREML_SINGULARITY_JOB_UAI: /subscriptions/e546c811-2312-46e2-9fd0-c949c65da4d9/resourcegroups/srgx/providers/Microsoft.ManagedIdentity/userAssignedIdentities/srgxuai
+  command:
+  - nvidia-smi
+  - torchrun --nproc_per_node=8 test_sidecar/occupy_gpus_active.py

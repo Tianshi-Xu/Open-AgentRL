@@ -1,0 +1,20 @@
+# 来自你的 amlt.yaml 'ignore:' 列表
+.git
+/checkpoints/
+/checkpoint/
+wandb/
+verl.egg-info/
+__pycache__/
+.venv/
+amlt/
+/outputs/
+figs/
+/output/
+SandboxFusion/.venv/
+
+# 你的 .whl 文件不应该被 ignore，因为它需要在构建时被安装
+flash_attn-2.7.4.post1+cu12torch2.7cxx11abiFALSE-cp311-cp311-linux_x86_64.whl
+
+# 忽略 Dockerfile 本身
+Dockerfile
+.dockerignore

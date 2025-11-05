@@ -1,14 +1,19 @@
-description: open-agentrl-qwen3-4b-sft
+description: open-agentrl-qwen3-4b-rl
 
 target:
   service: sing
   workspace_name: srgxws
-  name: palisades33
+  name: msrresrchbasicvc
 
 environment:
   image: amlt-sing/acpt-torch2.7.1-py3.10-cuda12.6-ubuntu22.04
   setup:
   - sudo apt update
+  - curl -LsSf https://astral.sh/uv/install.sh | sh
+  - source $$HOME/.local/bin/env
+  - uv python install 3.11
+  - export DEBIAN_FRONTEND=noninteractive
+  - sudo apt-get install -y libglib2.0-0
 
 code:
   local_dir: $CONFIG_DIR
@@ -24,15 +29,15 @@ code:
     - /outputs/
     - figs/
     - /output/
-    - flash_attn-2.7.4.post1+cu12torch2.6cxx11abiFALSE-cp311-cp311-linux_x86_64.whl
+    - flash_attn-2.7.4.post1+cu12torch2.7cxx11abiFALSE-cp311-cp311-linux_x86_64.whl
 
 data:
     local_dir: /home/v-tianshixu/pretrained_model/Qwen3-4B-RA-SFT
     remote_dir: pretrained_model/
 
 jobs:
-- name: open-agentrl-qwen3-4b-sft
-  sku: 1x40G8-A100
+- name: open-agentrl-qwen3-4b-rl
+  sku: 1x80G8-A100
   identity: managed
   priority: high
   submit_args:
@@ -42,15 +47,62 @@ jobs:
   command:
   - nvidia-smi
   - cat /etc/issue
-  - curl -LsSf https://astral.sh/uv/install.sh | sh
-  - source $$HOME/.local/bin/env
-  - uv python install 3.11
+  - cd SandboxFusion
+  - echo "--- 1. Installing Miniconda ---"
+  - curl -L -O "https://github.com/conda-forge/miniforge/releases/download/25.9.1-0/Miniforge3-25.9.1-0-Linux-x86_64.sh"
+  # -b: 批处理模式 (不提问)
+  # -p: 安装路径
+  - bash Miniforge3-25.9.1-0-Linux-x86_64.sh -b -p ./miniforge3
+  - rm Miniforge3-25.9.1-0-Linux-x86_64.sh
+
+  # 【关键】在脚本中"激活" Conda
+  # 这会初始化 conda，让 'conda activate' 命令可用
+  - ./miniforge3/bin/conda init bash
+  - source "./miniforge3/etc/profile.d/conda.sh"
+  # -----------------------------------------------------------------
+  # 2. 【第一半】设置 SandboxFusion 服务器
+  # -----------------------------------------------------------------
+  - echo "--- 2. Setting up SandboxFusion Server Environment ---"
+  
+  # 创建一个专用的 conda 环境 (使用 Python 3.11)
+  - mamba create -n sandbox-runtime -y python=3.11
+  
+  # 激活这个环境
+  - conda activate sandbox-runtime
+
+  - which python
+  - python --version
+
+  # 安装 Poetry (官方方法)
+  - curl -sSL https://install.python-poetry.org | python -
+  
+  # 安装 SandboxFusion 的依赖
+  - poetry install
+  
+  # 下载 NLTK 数据 (在 sandbox-runtime 环境中)
+  - pip install -r ./requirements.txt
+  - python -c "import nltk; nltk.download('punkt')"
+  - python -c "import nltk; nltk.download('stopwords')"
+  
+  # 运行测试
+  - mkdir -p docs/build
+  - make test-case CASE=test_python_assert
+  
+  # 【关键】在后台启动服务器
+  # 'poetry run' 确保它使用 sandbox-runtime 环境
+  - echo "--- Starting SandboxFusion Server in background ---"
+  - nohup make run-online > /tmp/sandboxfusion.log 2>&1 &
+  - sleep 10
+  - bash test.sh
+  # 返回根目录
+  - cd ..
+  - conda activate base
+  - conda deactivate
   - uv venv -p 3.11
   - source .venv/bin/activate
   - which python
   - python --version
-  - uv pip sync requirements.txt
-  - uv pip install --no-cache-dir flash_attn-2.7.4.post1+cu12torch2.6cxx11abiFALSE-cp311-cp311-linux_x86_64.whl
   - uv pip install -e .[vllm]
+  - uv pip install --no-cache-dir flash_attn-2.7.4.post1+cu12torch2.6cxx11abiFALSE-cp311-cp311-linux_x86_64.whl
   - uv pip list
-  - bash recipe/demystify/qwen3_4b_sft_custom.sh
+  - bash recipe/demystify/grpo_tcr_qwen3_4b.sh

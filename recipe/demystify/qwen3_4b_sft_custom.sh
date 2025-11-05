@@ -7,7 +7,7 @@ experiment_name=qwen3-4b-ra-sft
 DATA_ROOT=${DATA_ROOT:-$PWD}
 TRAIN_DATA=dataset/Open-AgentRL-SFT-3K/full_sft_3k_shuffled_v4.parquet
 EVAL_DATA=dataset/Open-AgentRL-SFT-3K/full_sft_3k_shuffled_v4.parquet
-MODEL_PATH=Qwen3-4B-Instruct-2507
+MODEL_PATH=Qwen3-4B-RA-SFT
 SAVE_PATH=checkpoints/$experiment_name
 
 # Set your wandb API key here or export it in your environment
