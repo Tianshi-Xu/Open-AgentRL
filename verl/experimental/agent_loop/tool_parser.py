@@ -48,14 +48,14 @@ class ToolParser(ABC):
         self.tokenizer = tokenizer
 
     @abstractmethod
-    async def extract_tool_calls(self, responses_ids: list[int]) -> tuple[str, list[FunctionCall]]:
+    async def extract_tool_calls(self, responses_ids: list[int]) -> tuple[str, list[FunctionCall], list[str]]:
         """Extract tool calls from the responses.
 
         Args:
             responses_ids (List[int]): The ids of the responses.
 
         Returns:
-            Tuple[str, List[FunctionCall]]: Content and extracted tool calls.
+            Tuple[str, List[FunctionCall], List[str]]: Remaining content, extracted tool calls, and parser errors.
         """
         raise NotImplementedError
 
@@ -108,23 +108,38 @@ class HermesToolParser(ToolParser):
         ]
 
     @rollout_trace_op
-    async def extract_tool_calls(self, responses_ids: list[int]) -> tuple[str, list[FunctionCall]]:
+    async def extract_tool_calls(self, responses_ids: list[int]) -> tuple[str, list[FunctionCall], list[str]]:
         loop = asyncio.get_running_loop()
         text = await loop.run_in_executor(None, self.tokenizer.decode, responses_ids)
         if self.tool_call_start_token not in text or self.tool_call_end_token not in text:
-            return text, []
+            return text, [], []
 
         matches = self.tool_call_regex.findall(text)
-        function_calls = []
+        function_calls: list[FunctionCall] = []
+        parse_errors: list[str] = []
         for match in matches:
             function_call = self._parse_tool_call(match)
             if function_call is None:
+                truncated = match.strip()[:200]
+                parse_errors.append(f"Tool call parsing failed: unable to decode payload: {truncated}")
+                continue
+
+            if isinstance(function_call, str):
+                parse_errors.append(function_call)
+                continue
+
+            if not isinstance(function_call, dict):
+                err_msg = f"Tool call payload is not a JSON object: {str(function_call)[:200]}"
+                logger.error(err_msg)
+                parse_errors.append(err_msg)
                 continue
 
             name = function_call.get("name")
             arguments = function_call.get("arguments", {})
             if not isinstance(name, str) or not name.strip():
-                logger.error("Failed to decode tool call: missing or invalid function name")
+                err_msg = "Failed to decode tool call: missing or invalid function name"
+                logger.error(err_msg)
+                parse_errors.append(err_msg)
                 continue
 
             if isinstance(arguments, str):
@@ -133,7 +148,9 @@ class HermesToolParser(ToolParser):
                 try:
                     arguments_payload = json.dumps(arguments, ensure_ascii=False)
                 except (TypeError, ValueError) as e:
-                    logger.error("Failed to decode tool call arguments for %s: %s", name, e)
+                    err_msg = f"Failed to decode tool call arguments for {name}: {e}"
+                    logger.error(err_msg)
+                    parse_errors.append(err_msg)
                     continue
 
             function_calls.append(FunctionCall(name=name, arguments=arguments_payload))
@@ -141,9 +158,9 @@ class HermesToolParser(ToolParser):
         # remaing text exclude tool call tokens
         content = self.tool_call_regex.sub("", text)
 
-        return content, function_calls
+        return content, function_calls, parse_errors
 
-    def _parse_tool_call(self, match: str) -> dict[str, Any] | None:
+    def _parse_tool_call(self, match: str) -> dict[str, Any] | str | None:
         raw_payload = match.strip()
         if not raw_payload:
             return None
@@ -155,8 +172,9 @@ class HermesToolParser(ToolParser):
             pass
         
         if not self.enable_repair:
-            logger.error("Tool call parsing failed in strict mode: %s", raw_payload[:200])
-            return None
+            err_msg = f"Tool call parsing failed in strict mode: {raw_payload[:200]}"
+            logger.error(err_msg)
+            return err_msg
 
         repaired_payload = self._repair_payload(raw_payload)
         try:
@@ -171,11 +189,11 @@ class HermesToolParser(ToolParser):
                 if isinstance(literal_candidate, dict):
                     return literal_candidate
             except Exception:
-                logger.error(
-                    "Failed to decode tool call after repair: %s | %s",
-                    json_err,
-                    raw_payload[:200],
+                err_msg = (
+                    f"Failed to decode tool call after repair: {json_err} | {raw_payload[:200]}"
                 )
+                logger.error(err_msg)
+                return err_msg
         return None
 
     def _repair_payload(self, payload: str) -> str:

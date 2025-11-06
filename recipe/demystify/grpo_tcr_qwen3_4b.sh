@@ -1,10 +1,11 @@
 #!/bin/bash
+export WANDB_API_KEY="c2ade05262c251418946ecc479a941028eb37bba"
 set -x
 
 export VLLM_USE_V1=1
-
+export SANDBOX_STATS_LOG_EVERY=80
+export VERL_TOOL_PARSER_ENABLE_REPAIR=0
 # Set your wandb API key here or export it in your environment
-export WANDB_API_KEY="c2ade05262c251418946ecc479a941028eb37bba"
 
 # AMLT_DATA_DIR will be automatically prepended to MODEL_PATH if set
 # export AMLT_DATA_DIR="/path/to/your/data"

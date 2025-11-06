@@ -81,6 +81,8 @@ class ToolAgentLoop(AgentLoopBase):
     @rollout_trace_op
     async def run(self, sampling_params: dict[str, Any], **kwargs) -> AgentLoopOutput:
         messages = list(kwargs["raw_prompt"])
+        # if logger.isEnabledFor(logging.INFO):
+        #     logger.info("raw_prompt messages:\n%s", json.dumps(messages, ensure_ascii=False, indent=2))
         image_data = copy.deepcopy(kwargs.get("multi_modal_data", {}).get("image", None))
         metrics = {}
         request_id = uuid4().hex
@@ -136,27 +138,40 @@ class ToolAgentLoop(AgentLoopBase):
             if self.max_user_turns and user_turns >= self.max_user_turns:
                 break
 
-            # no tool calls
-            _, tool_calls = await self.tool_parser.extract_tool_calls(response_ids)
-            if not tool_calls:
+            # Parse tool calls from LLM response
+            _, tool_calls, parser_errors = await self.tool_parser.extract_tool_calls(response_ids)
+
+            tool_messages: list[dict[str, Any]] = []
+            if parser_errors:
+                tool_messages.extend(
+                    {
+                        "role": "tool",
+                        "content": (
+                            "[tool_parser_error] "
+                            f"{error}. Please return a JSON object with keys 'name' and 'arguments' "
+                            "inside <tool_call>...</tool_call>."
+                        ),
+                    }
+                    for error in parser_errors
+                )
+
+            # No valid tool calls and no parser feedback -> exit loop
+            if not tool_calls and not tool_messages:
                 break
 
             # call tools
-            tasks = []
-            for tool_call in tool_calls[: self.max_parallel_calls]:
-                tasks.append(self._call_tool(tool_call, tools_kwargs))
-            with simple_timer("tool_calls", metrics):
-                tool_responses = await asyncio.gather(*tasks)
-            if any(isinstance(item, Exception) for item in tool_responses):
-                break
+            tool_responses = []
+            if tool_calls:
+                tasks = [self._call_tool(tool_call, tools_kwargs) for tool_call in tool_calls[: self.max_parallel_calls]]
+                with simple_timer("tool_calls", metrics):
+                    tool_responses = await asyncio.gather(*tasks)
+                if any(isinstance(item, Exception) for item in tool_responses):
+                    break
 
             # Extract messages and update multi_modal_data
-            tool_messages = []
-            new_images_this_turn = []
+            new_images_this_turn: list[Any] = []
             for tool_response in tool_responses:
-                # Create message from tool response
                 if tool_response.image or tool_response.video:
-                    # Multi-modal content with structured format
                     content = []
                     if tool_response.image:
                         content.append({"type": "image"})
@@ -166,19 +181,16 @@ class ToolAgentLoop(AgentLoopBase):
                         content.append({"type": "text", "text": tool_response.text})
                     message = {"role": "tool", "content": content}
                 else:
-                    # Text-only content
                     message = {"role": "tool", "content": tool_response.text or ""}
 
                 tool_messages.append(message)
 
-                # Handle image data
                 if tool_response.image:
                     if image_data is None:
                         image_data = []
                     elif not isinstance(image_data, list):
                         image_data = [image_data]
 
-                    # Add new image data
                     if isinstance(tool_response.image, list):
                         image_data.extend(tool_response.image)
                         new_images_this_turn.extend(tool_response.image)
@@ -186,34 +198,16 @@ class ToolAgentLoop(AgentLoopBase):
                         image_data.append(tool_response.image)
                         new_images_this_turn.append(tool_response.image)
 
-                # Handle video data
                 if tool_response.video:
-                    # Currently not supported, raise informative error
                     logger.warning("Multimedia type 'video' is not currently supported. Only 'image' is supported.")
                     raise NotImplementedError(
                         "Multimedia type 'video' is not currently supported. Only 'image' is supported."
                     )
 
-            # append tool_response_ids
-            if self.processor is not None:
-                raw_tool_response = await self.loop.run_in_executor(
-                    None,
-                    lambda messages=tool_messages: self.processor.apply_chat_template(
-                        messages, add_generation_prompt=True, tokenize=False, **self.apply_chat_template_kwargs
-                    ),
-                )
-                # Use only the new images from this turn for processing tool responses
-                current_images = new_images_this_turn if new_images_this_turn else None
-                model_inputs = self.processor(text=[raw_tool_response], images=current_images, return_tensors="pt")
-                tool_response_ids = model_inputs.pop("input_ids").squeeze(0).tolist()
-            else:
-                tool_response_ids = await self.loop.run_in_executor(
-                    None,
-                    lambda messages=tool_messages: self.tokenizer.apply_chat_template(
-                        messages, add_generation_prompt=True, tokenize=True, **self.apply_chat_template_kwargs
-                    ),
-                )
-            tool_response_ids = tool_response_ids[len(self.system_prompt) :]
+            if not tool_messages:
+                continue
+
+            tool_response_ids = await self._encode_tool_messages(tool_messages, new_images_this_turn)
 
             # NOTE: last turn should not be user turn, or the EOS token reward
             # can't be propagated to previous token in GAE.
@@ -241,6 +235,34 @@ class ToolAgentLoop(AgentLoopBase):
             metrics=metrics,
         )
         return output
+
+    async def _encode_tool_messages(
+        self,
+        tool_messages: list[dict[str, Any]],
+        new_images_this_turn: list[Any],
+    ) -> list[int]:
+        if not tool_messages:
+            return []
+
+        if self.processor is not None:
+            raw_tool_response = await self.loop.run_in_executor(
+                None,
+                lambda messages=tool_messages: self.processor.apply_chat_template(
+                    messages, add_generation_prompt=True, tokenize=False, **self.apply_chat_template_kwargs
+                ),
+            )
+            current_images = new_images_this_turn if new_images_this_turn else None
+            model_inputs = self.processor(text=[raw_tool_response], images=current_images, return_tensors="pt")
+            tool_response_ids = model_inputs.pop("input_ids").squeeze(0).tolist()
+        else:
+            tool_response_ids = await self.loop.run_in_executor(
+                None,
+                lambda messages=tool_messages: self.tokenizer.apply_chat_template(
+                    messages, add_generation_prompt=True, tokenize=True, **self.apply_chat_template_kwargs
+                ),
+            )
+
+        return tool_response_ids[len(self.system_prompt) :]
 
     async def _call_tool(self, tool_call: FunctionCall, tools_kwargs: dict[str, Any]) -> ToolResponse:
         """Call tool and return tool response."""

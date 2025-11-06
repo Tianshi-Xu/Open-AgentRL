@@ -250,9 +250,19 @@ class ChatModel(BaseChatModel):
             self.tokenizer,
             enable_repair=self.tool_parser_enable_repair,
         )
-        content, function_calls = await tool_parser.extract_tool_calls(response_ids)
+        content, function_calls, parser_errors = await tool_parser.extract_tool_calls(response_ids)
 
         tool_calls, invalid_tool_calls = [], []
+
+        for error in parser_errors:
+            invalid_tool_calls.append(
+                InvalidToolCall(
+                    name="__parser_error__",
+                    args="",
+                    id=str(uuid.uuid4()),
+                    error=error,
+                )
+            )
 
         for function_call in function_calls:
             error = None

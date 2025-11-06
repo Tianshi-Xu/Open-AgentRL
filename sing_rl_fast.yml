@@ -29,6 +29,7 @@ code:
     - /output/
     - flash_attn-2.7.4.post1+cu12torch2.7cxx11abiFALSE-cp311-cp311-linux_x86_64.whl
     - flash_attn-2.7.4.post1+cu12torch2.6cxx11abiFALSE-cp311-cp311-linux_x86_64.whl
+    - /pretrained_model/
 
 jobs:
 - name: open-agentrl-qwen3-4b-rl-test
@@ -39,6 +40,10 @@ jobs:
     env:
       NCCL_DEBUG: "ERROR"
       _AZUREML_SINGULARITY_JOB_UAI: /subscriptions/e546c811-2312-46e2-9fd0-c949c65da4d9/resourcegroups/srgx/providers/Microsoft.ManagedIdentity/userAssignedIdentities/srgxuai
+      SANDBOX_LOG_LEVEL: "INFO"
+      VERL_LOGGING_LEVEL: "INFO"
+      SANDBOX_STATS_LOG_EVERY: "80"
+      VERL_TOOL_PARSER_ENABLE_REPAIR: "0"
   command:
     - cat sing_rl_fast.yml
     - source /opt/miniforge3/etc/profile.d/conda.sh
@@ -48,7 +53,7 @@ jobs:
     # - poetry install
     - mkdir -p docs/build
     - make test-case CASE=test_python_assert
-    - nohup make run-online > /tmp/sandboxfusion.log 2>&1 &
+    - stdbuf -oL -eL make run-online 2>&1 | tee /tmp/sandboxfusion.log &
     - sleep 5
     - bash test.sh
     - cd ..
