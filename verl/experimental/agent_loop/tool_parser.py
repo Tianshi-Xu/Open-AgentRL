@@ -11,11 +11,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import ast
 import asyncio
 import json
 import logging
 import os
 from abc import ABC, abstractmethod
+from typing import Any
 
 import regex as re
 from pydantic import BaseModel
@@ -82,6 +84,13 @@ class HermesToolParser(ToolParser):
         self.tool_call_start_token: str = "<tool_call>"
         self.tool_call_end_token: str = "</tool_call>"
         self.tool_call_regex = re.compile(r"<tool_call>(.*?)</tool_call>", re.DOTALL)
+        self._invalid_escape_regex = re.compile(r"\\([^\"\\/bfnrtu])")
+        self._control_char_regex = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+        self._json_keyword_patterns: list[tuple[re.Pattern[str], str]] = [
+            (re.compile(r"(?<![\\w\"\'])\btrue\b", re.IGNORECASE), "True"),
+            (re.compile(r"(?<![\\w\"\'])\bfalse\b", re.IGNORECASE), "False"),
+            (re.compile(r"(?<![\\w\"\'])\bnull\b", re.IGNORECASE), "None"),
+        ]
 
     @rollout_trace_op
     async def extract_tool_calls(self, responses_ids: list[int]) -> tuple[str, list[FunctionCall]]:
@@ -93,14 +102,116 @@ class HermesToolParser(ToolParser):
         matches = self.tool_call_regex.findall(text)
         function_calls = []
         for match in matches:
-            try:
-                function_call = json.loads(match)
-                name, arguments = function_call["name"], function_call["arguments"]
-                function_calls.append(FunctionCall(name=name, arguments=json.dumps(arguments, ensure_ascii=False)))
-            except Exception as e:
-                logger.error(f"Failed to decode tool call: {e}")
+            function_call = self._parse_tool_call(match)
+            if function_call is None:
+                continue
+
+            name = function_call.get("name")
+            arguments = function_call.get("arguments", {})
+            if not isinstance(name, str) or not name.strip():
+                logger.error("Failed to decode tool call: missing or invalid function name")
+                continue
+
+            if isinstance(arguments, str):
+                arguments_payload = arguments
+            else:
+                try:
+                    arguments_payload = json.dumps(arguments, ensure_ascii=False)
+                except (TypeError, ValueError) as e:
+                    logger.error("Failed to decode tool call arguments for %s: %s", name, e)
+                    continue
+
+            function_calls.append(FunctionCall(name=name, arguments=arguments_payload))
 
         # remaing text exclude tool call tokens
         content = self.tool_call_regex.sub("", text)
 
         return content, function_calls
+
+    def _parse_tool_call(self, match: str) -> dict[str, Any] | None:
+        raw_payload = match.strip()
+        if not raw_payload:
+            return None
+
+        # First try direct JSON parsing
+        try:
+            return json.loads(raw_payload)
+        except json.JSONDecodeError:
+            pass
+
+        repaired_payload = self._repair_payload(raw_payload)
+        try:
+            return json.loads(repaired_payload)
+        except json.JSONDecodeError as json_err:
+            # Fall back to Python literal parsing for lenient inputs
+            literal_ready_payload = repaired_payload
+            for pattern, replacement in self._json_keyword_patterns:
+                literal_ready_payload = pattern.sub(replacement, literal_ready_payload)
+            try:
+                literal_candidate = ast.literal_eval(literal_ready_payload)
+                if isinstance(literal_candidate, dict):
+                    return literal_candidate
+            except Exception:
+                logger.error(
+                    "Failed to decode tool call after repair: %s | %s",
+                    json_err,
+                    raw_payload[:200],
+                )
+        return None
+
+    def _repair_payload(self, payload: str) -> str:
+        repaired = payload
+        # Escape control characters that break JSON parsing
+        repaired = self._control_char_regex.sub(lambda m: f"\\u{ord(m.group(0)):04x}", repaired)
+        # Escape unknown backslash sequences to keep them literal
+        repaired = self._invalid_escape_regex.sub(lambda m: "\\\\" + m.group(1), repaired)
+        # Remove trailing commas before closing braces/brackets while respecting quoted regions
+        repaired = self._strip_trailing_commas(repaired)
+        return repaired
+
+    def _strip_trailing_commas(self, payload: str) -> str:
+        result: list[str] = []
+        in_string = False
+        string_delim = ""
+        i = 0
+        length = len(payload)
+        while i < length:
+            ch = payload[i]
+            if ch in {'"', "'"}:
+                if not in_string:
+                    in_string = True
+                    string_delim = ch
+                elif not self._is_escaped(payload, i) and ch == string_delim:
+                    in_string = False
+                    string_delim = ""
+                result.append(ch)
+                i += 1
+                continue
+            if ch == '\\' and in_string:
+                # Preserve escape sequences inside strings
+                result.append(ch)
+                if i + 1 < length:
+                    result.append(payload[i + 1])
+                    i += 2
+                else:
+                    i += 1
+                continue
+            if ch == ',' and not in_string:
+                j = i + 1
+                while j < length and payload[j].isspace():
+                    j += 1
+                if j < length and payload[j] in '}]':
+                    i += 1
+                    continue
+            result.append(ch)
+            i += 1
+        return ''.join(result)
+
+    @staticmethod
+    def _is_escaped(text: str, index: int) -> bool:
+        backslash_count = 0
+        idx = index - 1
+        while idx >= 0 and text[idx] == '\\':
+            backslash_count += 1
+            idx -= 1
+        return (backslash_count % 2) == 1

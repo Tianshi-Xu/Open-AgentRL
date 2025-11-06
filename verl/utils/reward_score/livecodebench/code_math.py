@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import json
+import logging
 import re
 import traceback
 from verl.utils.reward_score.livecodebench import lcb_compute_score, prepare_unit_test_data
@@ -46,6 +47,7 @@ inf = float('inf')
 
 '''
 sandbox_fusion_url = "http://localhost:8081/run_code"
+logger = logging.getLogger(__name__)
 livecodebench_dir = os.environ.get("LIVECODEBENCH_DATA_PATH", None)
 # if livecodebench_dir is None:
 #     raise ValueError("LIVECODEBENCH_DATA_PATH is not set")
@@ -95,9 +97,13 @@ def timeout_run(seconds):
     finally:
         signal.alarm(0)
 
-def convert_function_to_class_method(raw_code: str, function_name: str) -> str:
+def convert_function_to_class_method(raw_code: str, function_name: str) -> Optional[str]:
     # 解析原始代码为 AST
-    tree = ast.parse(raw_code)
+    try:
+        tree = ast.parse(raw_code)
+    except SyntaxError as exc:
+        logger.warning("Failed to parse function before conversion", exc_info=exc)
+        return None
     target_func = None
     new_body = []
     # 遍历顶层节点，保留非目标函数的代码
@@ -125,7 +131,11 @@ def convert_function_to_class_method(raw_code: str, function_name: str) -> str:
     tree.body = new_body
     
     # 使用 ast.unparse 将 AST 转换为代码字符串（Python 3.9+支持）
-    new_code = ast.unparse(tree)
+    try:
+        new_code = ast.unparse(tree)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("Failed to unparse converted Solution class", exc_info=exc)
+        return None
     return new_code
 
 
@@ -200,7 +210,11 @@ def compute_score(completion, test_cases, task=None, timeout=30, is_long_penalty
             return {"score": -1.0, "acc": False, "pred": None}
         try:
             solution = solutions[-1]
-            tree = ast.parse(solution)
+            try:
+                ast.parse(solution)
+            except SyntaxError as exc:
+                logger.info("Syntax error detected before executing sandbox tests", exc_info=exc)
+                return {"score": -1.0, "acc": False, "pred": None, "error": "syntax_error"}
             try:
                 test_cases = json.loads(test_cases)
             except:
@@ -216,15 +230,19 @@ def compute_score(completion, test_cases, task=None, timeout=30, is_long_penalty
                 cur_solution += "\ncheck({})".format(test_cases['entry_point'])
                 try:
                     # 执行代码的逻辑
-                    success = False
-                    message = None
                     ## Add Sandbox Fusion API
                     metrics = check_correctness(
-                            sandbox_fusion_url=sandbox_fusion_url,
-                            in_outs={'inputs':["prefix"],"outputs":["prefix"]},
-                            generation=cur_solution,
-                            timeout=timeout
-                        )
+                        sandbox_fusion_url=sandbox_fusion_url,
+                        in_outs={'inputs':["prefix"],"outputs":["prefix"]},
+                        generation=cur_solution,
+                        timeout=timeout,
+                        collect_stats=True,
+                    )
+                    metrics = list(metrics)
+                    summary = None
+                    if len(metrics) == 3:
+                        _, _, summary = metrics
+                        logger.info("Sandbox execution summary", extra={"summary": summary})
                     if metrics[1][0]['api_response']['run_result']['return_code'] == 0:
                          unit_test_result.append(True)
                          unit_test_metadata.append(f"成功")
@@ -241,13 +259,25 @@ def compute_score(completion, test_cases, task=None, timeout=30, is_long_penalty
                     unit_test_result.append(False)
                     unit_test_metadata.append("执行异常")
                     
+            sandbox_stats = summary if 'summary' in locals() else None
             if is_binary_reward:
-                return {"score": 1.0 if all(unit_test_result) else -1.0, "acc": all(unit_test_result), "pred": solution}
+                payload = {"score": 1.0 if all(unit_test_result) else -1.0, "acc": all(unit_test_result), "pred": solution}
             else:
                 if is_power4_reward:
-                    return {"score": sum(unit_test_result)/len(unit_test_result)**4, "acc": all(unit_test_result), "pred": solution}
+                    payload = {
+                        "score": sum(unit_test_result)/len(unit_test_result)**4,
+                        "acc": all(unit_test_result),
+                        "pred": solution,
+                    }
                 else:
-                    return  {"score": sum(unit_test_result)/len(unit_test_result), "acc": all(unit_test_result), "pred": solution}
+                    payload = {
+                        "score": sum(unit_test_result)/len(unit_test_result),
+                        "acc": all(unit_test_result),
+                        "pred": solution,
+                    }
+            if sandbox_stats:
+                payload["sandbox_stats"] = sandbox_stats
+            return payload
 
         except Exception as e:
             traceback.print_exc(10)
@@ -261,10 +291,10 @@ def compute_score(completion, test_cases, task=None, timeout=30, is_long_penalty
             else:
                 solution = solutions[-1]
                 try:
-                    tree = ast.parse(solution)
-                except:
-                    traceback.print_exc(10)
-                    return {"score": -1.0, "acc": False, "pred": None}
+                    ast.parse(solution)
+                except SyntaxError as exc:
+                    logger.info("Syntax error detected before sandbox correctness check", exc_info=exc)
+                    return {"score": -1.0, "acc": False, "pred": None, "error": "syntax_error"}
 
             if isinstance(test_cases, str):
                 try:
@@ -289,9 +319,13 @@ def compute_score(completion, test_cases, task=None, timeout=30, is_long_penalty
                 in_outs=json.loads(json.dumps(test_cases)),
                 generation=solution,
                 timeout=timeout,
+                collect_stats=True,
             )
-
             metrics = list(metrics)
+            summary = None
+            if len(metrics) == 3:
+                _, _, summary = metrics
+                logger.info("Sandbox execution summary", extra={"summary": summary})
             # print(metrics)
             fixed = []
             for e in metrics[0]:
@@ -303,12 +337,27 @@ def compute_score(completion, test_cases, task=None, timeout=30, is_long_penalty
             metrics[0] = fixed
 
             if is_binary_reward:
-                return {"score": 1.0 if sum(metrics[0]) == len(metrics[0]) else -1.0, "acc": sum(metrics[0]) == len(metrics[0]), "pred": solution}
+                payload = {
+                    "score": 1.0 if sum(metrics[0]) == len(metrics[0]) else -1.0,
+                    "acc": sum(metrics[0]) == len(metrics[0]),
+                    "pred": solution,
+                }
             else:
                 if is_power4_reward:
-                    return {"score": (sum((x if x in [False, True] else False) for x in metrics[0])/len(metrics[0]))**4, "acc": sum(metrics[0]) == len(metrics[0]), "pred": solution}
+                    payload = {
+                        "score": (sum((x if x in [False, True] else False) for x in metrics[0]) / len(metrics[0]))**4,
+                        "acc": sum(metrics[0]) == len(metrics[0]),
+                        "pred": solution,
+                    }
                 else:
-                    return {"score": sum((x if x in [False, True] else False) for x in metrics[0])/len(metrics[0]), "acc": sum(metrics[0]) == len(metrics[0]), "pred": solution}
+                    payload = {
+                        "score": sum((x if x in [False, True] else False) for x in metrics[0]) / len(metrics[0]),
+                        "acc": sum(metrics[0]) == len(metrics[0]),
+                        "pred": solution,
+                    }
+            if summary:
+                payload["sandbox_stats"] = summary
+            return payload
 
         except Exception as e:
             traceback.print_exc(10)

@@ -64,8 +64,8 @@ n_resp_per_prompt=16
 n_resp_per_prompt_val=32
 
 # ================= perfomance =================
-infer_tp=8 # vllm
-train_sp=8 # train
+infer_tp=4 # vllm
+train_sp=4 # train
 offload=True
 
 # For 40GB GPU: reduce token length per GPU by half to enable gradient accumulation
@@ -127,7 +127,7 @@ fi
     actor_rollout_ref.actor.fsdp_config.param_offload=$offload \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=$offload \
     +actor_rollout_ref.actor.fsdp_config.model_dtype=bfloat16 \
-    +actor_rollout_ref.actor.fsdp_config.fsdp_size=2 \
+    actor_rollout_ref.actor.fsdp_config.fsdp_size=2 \
     actor_rollout_ref.ref.log_prob_max_token_len_per_gpu=$log_prob_max_token_len_per_gpu \
     actor_rollout_ref.rollout.name=vllm \
     actor_rollout_ref.rollout.mode=async \
@@ -138,6 +138,7 @@ fi
     actor_rollout_ref.rollout.multi_turn.tool_config_path=$tool_config_path \
     actor_rollout_ref.rollout.multi_turn.format=hermes \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.75 \
+    actor_rollout_ref.rollout.dtype=bfloat16 \
     actor_rollout_ref.rollout.n=$n_resp_per_prompt \
     actor_rollout_ref.rollout.val_kwargs.top_p=0.6 \
     actor_rollout_ref.rollout.val_kwargs.temperature=1.0 \
@@ -151,7 +152,7 @@ fi
     trainer.logger=['console','wandb'] \
     trainer.project_name=$project_name \
     trainer.experiment_name=$experiment_name \
-    trainer.n_gpus_per_node=16 \
+    trainer.n_gpus_per_node=8 \
     trainer.val_before_train=True \
     trainer.log_val_generations=20 \
     trainer.nnodes=1 \

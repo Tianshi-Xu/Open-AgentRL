@@ -3,7 +3,7 @@ description: open-agentrl-qwen3-4b-rl
 target:
   service: sing
   workspace_name: srgxws
-  name: msrresrchlabbasic
+  name: msrresrchbasicvc
 
 environment:
   image: verl-sandbox:v2
@@ -32,7 +32,7 @@ code:
 
 jobs:
 - name: open-agentrl-qwen3-4b-rl-test
-  sku: 1x40G8
+  sku: 1x80G8
   identity: managed
   priority: high
   submit_args:

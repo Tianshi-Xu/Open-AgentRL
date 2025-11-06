@@ -20,6 +20,7 @@ import time
 import traceback
 import uuid
 from typing import Any, Optional
+from collections import Counter
 import ast
 import requests
 
@@ -110,7 +111,12 @@ def call_sandbox_api(
             "fetch_files": [],
         }
     )
-    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "X-Request-ID": request_id,
+        "X-Caller": "Open-AgentRL",
+    }
     # Calculate a reasonable request timeout based on compile/run timeouts plus a buffer
     request_timeout = compile_timeout + run_timeout + API_TIMEOUT
 
@@ -454,7 +460,8 @@ def check_correctness(
     memory_limit_mb: int = 1024,
     language: str = "python",
     concurrent_semaphore: Optional[threading.Semaphore] = None,
-) -> tuple[list[Any], list[dict[str, Any]]]:
+    collect_stats: bool = False,
+) -> tuple[list[Any], list[dict[str, Any]]] | tuple[list[Any], list[dict[str, Any]], dict[str, Any]]:
     """
     Checks the correctness of code generation using the remote sandbox API,
     processing test cases concurrently.
@@ -467,7 +474,9 @@ def check_correctness(
         language: The programming language of the code.
 
     Returns:
-        A tuple (results, metadata_list).
+        A tuple (results, metadata_list) when collect_stats is False.
+        When collect_stats is True, returns (results, metadata_list, summary) where summary
+        contains aggregated statistics such as success counts and rates.
         results: A list containing the test result for each input/output pair
                  (True/False/-1 api/sandbox err, -2 runtime err, -3 timeout, -4 compile err).
                  Results are ordered corresponding to the inputs.
@@ -585,7 +594,39 @@ def check_correctness(
                 else:  # If future completed but result is overridden
                     metadata_list[i]["status"] = "compile_error_skipped"
  
-    logger.info(f"Correctness check finished. Results: {results}")
+    status_counter: Counter[str] = Counter()
+    for value in results:
+        if value is True:
+            status_counter["success"] += 1
+        elif value is False:
+            status_counter["wrong_answer"] += 1
+        elif isinstance(value, bool):
+            # Already handled True/False; included for completeness
+            status_counter["unknown"] += 1
+        elif value == -2:
+            status_counter["runtime_error"] += 1
+        elif value == -3:
+            status_counter["timeout"] += 1
+        elif value == -4:
+            status_counter["compile_error"] += 1
+        elif value == -1:
+            status_counter["api_error"] += 1
+        else:
+            status_counter["unknown"] += 1
+
+    total_cases = len(results)
+    success_count = status_counter.get("success", 0)
+    success_rate = success_count / total_cases if total_cases else 0.0
+    summary = {
+        "total_cases": total_cases,
+        "success_count": success_count,
+        "success_rate": success_rate,
+        "status_breakdown": dict(status_counter),
+    }
+
+    logger.info("Correctness check finished. summary=%s", summary)
+    if collect_stats:
+        return results, metadata_list, summary
     return results, metadata_list
 
 

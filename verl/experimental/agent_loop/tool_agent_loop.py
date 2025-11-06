@@ -29,6 +29,11 @@ from verl.utils.rollout_trace import rollout_trace_op
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 
+TOOL_NAME_ALIASES: dict[str, str] = {
+    "code_interation": "code_interpreter",
+    "code_interpriter": "code_interpreter",
+}
+
 
 @register("tool_agent")
 class ToolAgentLoop(AgentLoopBase):
@@ -230,8 +235,14 @@ class ToolAgentLoop(AgentLoopBase):
         tool, instance_id = None, None
         try:
             # TODO: append malformed tool_call to the prompt: invalid function name or arguments
-            tool_name = tool_call.name
+            tool_name = TOOL_NAME_ALIASES.get(tool_call.name, tool_call.name)
+            if tool_name != tool_call.name:
+                logger.debug("Normalizing tool name %s -> %s", tool_call.name, tool_name)
             tool_args = json.loads(tool_call.arguments)
+            if not isinstance(tool_args, dict):
+                raise ValueError(
+                    f"Tool arguments must be a JSON object, got {type(tool_args).__name__}: {tool_call.arguments[:200]}"
+                )
             tool = self.tools[tool_name]
             kwargs = tools_kwargs.get(tool_name, {})
             instance_id, _ = await tool.create(create_kwargs=kwargs.get("create_kwargs", {}))
