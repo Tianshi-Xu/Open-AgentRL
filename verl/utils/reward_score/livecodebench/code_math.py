@@ -203,8 +203,41 @@ def compute_score(completion, test_cases, task=None, timeout=30, is_long_penalty
         solution_str = completion.split("</think>")[1]
     else:
         solution_str = completion
-    test_cases = str(test_cases)
-    if 'import_prefix' in test_cases:
+
+    test_cases_dict = None
+    test_cases_str = None
+    if isinstance(test_cases, dict):
+        test_cases_dict = test_cases
+        try:
+            test_cases_str = json.dumps(test_cases)
+        except TypeError:  # pragma: no cover - defensive fallback
+            test_cases_str = str(test_cases)
+    elif isinstance(test_cases, str):
+        test_cases_str = test_cases
+        try:
+            test_cases_dict = json.loads(test_cases)
+        except json.JSONDecodeError:
+            try:
+                test_cases_dict = ast.literal_eval(test_cases)
+            except (ValueError, SyntaxError):
+                test_cases_dict = None
+    else:
+        try:
+            test_cases_str = json.dumps(test_cases)
+        except TypeError:  # pragma: no cover - defensive fallback
+            test_cases_str = str(test_cases)
+
+    has_import_prefix = isinstance(test_cases_dict, dict) and "import_prefix" in test_cases_dict
+    has_inputs = isinstance(test_cases_dict, dict) and "inputs" in test_cases_dict
+    if not has_import_prefix and test_cases_str:
+        has_import_prefix = "import_prefix" in test_cases_str
+    if not has_inputs and test_cases_str:
+        has_inputs = "inputs" in test_cases_str
+
+    if has_import_prefix:
+        if not isinstance(test_cases_dict, dict):
+            logger.warning("Unable to parse test cases containing import_prefix")
+            return {"score": -1.0, "acc": False, "pred": None}
         solutions = re.findall(r"```python\n(.*?)```", solution_str, re.DOTALL)
         if len(solutions) == 0:
             return {"score": -1.0, "acc": False, "pred": None}
@@ -215,19 +248,15 @@ def compute_score(completion, test_cases, task=None, timeout=30, is_long_penalty
             except SyntaxError as exc:
                 logger.info("Syntax error detected before executing sandbox tests", exc_info=exc)
                 return {"score": -1.0, "acc": False, "pred": None, "error": "syntax_error"}
-            try:
-                test_cases = json.loads(test_cases)
-            except:
-                tmp = json.dumps(test_cases)
-                test_cases = json.loads(tmp)
-            solution = test_cases["import_prefix"] + solution
-            test_code = [x for x in test_cases['test_code'].split("\n") if x != ""]
+            solution = test_cases_dict["import_prefix"] + solution
+            test_code = [x for x in test_cases_dict['test_code'].split("\n") if x != ""]
             unit_test_result = []
             unit_test_metadata = []
+            summary = None
             for i in range(1, len(test_code)):
                 cur_solution = solution
                 cur_solution += "\n" + test_code[0] + test_code[i]
-                cur_solution += "\ncheck({})".format(test_cases['entry_point'])
+                cur_solution += "\ncheck({})".format(test_cases_dict['entry_point'])
                 try:
                     # 执行代码的逻辑
                     ## Add Sandbox Fusion API
@@ -239,7 +268,6 @@ def compute_score(completion, test_cases, task=None, timeout=30, is_long_penalty
                         collect_stats=True,
                     )
                     metrics = list(metrics)
-                    summary = None
                     if len(metrics) == 3:
                         _, _, summary = metrics
                         logger.info("Sandbox execution summary", extra={"summary": summary})
@@ -259,7 +287,7 @@ def compute_score(completion, test_cases, task=None, timeout=30, is_long_penalty
                     unit_test_result.append(False)
                     unit_test_metadata.append("执行异常")
                     
-            sandbox_stats = summary if 'summary' in locals() else None
+            sandbox_stats = summary
             if is_binary_reward:
                 payload = {"score": 1.0 if all(unit_test_result) else -1.0, "acc": all(unit_test_result), "pred": solution}
             else:
@@ -283,7 +311,10 @@ def compute_score(completion, test_cases, task=None, timeout=30, is_long_penalty
             traceback.print_exc(10)
             return {"score": -1.0, "acc": False, "pred": None}
 
-    elif "inputs" in test_cases:
+    elif has_inputs:
+        if not isinstance(test_cases_dict, dict):
+            logger.warning("Unable to parse test cases containing inputs")
+            return {"score": -1.0, "acc": False, "pred": None}
         try:
             solutions = re.findall(r"```python\n(.*?)```", solution_str, re.DOTALL)
             if len(solutions) == 0:
@@ -296,27 +327,16 @@ def compute_score(completion, test_cases, task=None, timeout=30, is_long_penalty
                     logger.info("Syntax error detected before sandbox correctness check", exc_info=exc)
                     return {"score": -1.0, "acc": False, "pred": None, "error": "syntax_error"}
 
-            if isinstance(test_cases, str):
-                try:
-                    input_output = json.loads(test_cases)
-                except:
-                    tmp = json.dumps(test_cases)
-                    input_output = json.loads(tmp)
-            elif isinstance(test_cases, dict):
-                input_output = test_cases
-                test_cases = json.dumps(test_cases)
-                
-            else:
-                assert False
+            input_output = test_cases_dict
             if "fn_name" in input_output and "class Solution" not in solution:
-                solution = convert_function_to_class_method(solution, input_output["fn_name"])
-                if not isinstance(solution, str):
-                    return  {"score": -1.0, "acc": False, "pred": None}
+                converted_solution = convert_function_to_class_method(solution, input_output["fn_name"])
+                if isinstance(converted_solution, str):
+                    solution = converted_solution
                 
              ## Add Sandbox Fusion API
             metrics = check_correctness(
                 sandbox_fusion_url = sandbox_fusion_url,
-                in_outs=json.loads(json.dumps(test_cases)),
+                in_outs=json.loads(json.dumps(input_output)),
                 generation=solution,
                 timeout=timeout,
                 collect_stats=True,

@@ -25,7 +25,7 @@ from pydantic import BaseModel
 from verl.utils.rollout_trace import rollout_trace_op
 
 logger = logging.getLogger(__file__)
-logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
+logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "INFO"))
 
 
 class FunctionCall(BaseModel):
@@ -44,7 +44,7 @@ class FunctionCall(BaseModel):
 class ToolParser(ABC):
     _registry: dict[str, type["ToolParser"]] = {}
 
-    def __init__(self, tokenizer) -> None:
+    def __init__(self, tokenizer, **_: Any) -> None:
         self.tokenizer = tokenizer
 
     @abstractmethod
@@ -60,10 +60,10 @@ class ToolParser(ABC):
         raise NotImplementedError
 
     @classmethod
-    def get_tool_parser(cls, name: str, tokenizer):
+    def get_tool_parser(cls, name: str, tokenizer, **kwargs: Any):
         if name not in cls._registry:
             raise ValueError(f"Unknown tool parser: {name}")
-        return cls._registry[name](tokenizer)
+        return cls._registry[name](tokenizer, **kwargs)
 
     @classmethod
     def register(cls, name: str):
@@ -78,8 +78,23 @@ class ToolParser(ABC):
 class HermesToolParser(ToolParser):
     """Adapted from https://github.com/vllm-project/vllm/blob/v0.9.1/vllm/entrypoints/openai/tool_parsers/hermes_tool_parser.py"""
 
-    def __init__(self, tokenizer) -> None:
+    def __init__(self, tokenizer, enable_repair: bool | None = None) -> None:
         super().__init__(tokenizer)
+
+        env_value = os.getenv("VERL_TOOL_PARSER_ENABLE_REPAIR")
+        if enable_repair is None:
+            if env_value is None:
+                enable_repair = True
+            else:
+                enable_repair = env_value.lower() not in {"0", "false", "no"}
+        elif isinstance(enable_repair, str):
+            enable_repair = enable_repair.lower() not in {"0", "false", "no"}
+        elif not isinstance(enable_repair, bool):
+            raise TypeError(
+                f"enable_repair must be a bool, string, or None; got {type(enable_repair).__name__}"
+            )
+        # print("enable_repair =", enable_repair)    
+        self.enable_repair = enable_repair
 
         self.tool_call_start_token: str = "<tool_call>"
         self.tool_call_end_token: str = "</tool_call>"
@@ -132,12 +147,16 @@ class HermesToolParser(ToolParser):
         raw_payload = match.strip()
         if not raw_payload:
             return None
-
+        # logger.info("enable_repair=%s", self.enable_repair)
         # First try direct JSON parsing
         try:
             return json.loads(raw_payload)
         except json.JSONDecodeError:
             pass
+        
+        if not self.enable_repair:
+            logger.error("Tool call parsing failed in strict mode: %s", raw_payload[:200])
+            return None
 
         repaired_payload = self._repair_payload(raw_payload)
         try:

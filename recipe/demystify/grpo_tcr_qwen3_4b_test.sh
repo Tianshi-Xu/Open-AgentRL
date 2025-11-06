@@ -5,7 +5,7 @@ export VLLM_USE_V1=1
 open_agent_rl=dataset/Open-AgentRL-30K/Open-AgentRL-30K.parquet
 aime_2024=dataset/Open-AgentRL-Eval/aime2024/aime_2024_problems.parquet
 aime_2025=dataset/Open-AgentRL-Eval/aime2025/aime_2025_problems.parquet
-model_path=output/qwen3-4b-sft/huggingface
+model_path=pretrained_model/Qwen3-4B-RA-SFT
 
 train_files="['$open_agent_rl']"
 test_files="['$aime_2025', '$aime_2024']"
@@ -48,13 +48,13 @@ overlong_penalty_factor=1.0
 
 max_turns=16
 max_prompt_length=2560
-max_response_length=4096
+max_response_length=20480
 actor_lr=1e-6
 
-train_batch_size=1
-ppo_mini_batch_size=1
-n_resp_per_prompt=4
-n_resp_per_prompt_val=4
+train_batch_size=64
+ppo_mini_batch_size=16
+n_resp_per_prompt=16
+n_resp_per_prompt_val=32
 
 # ================= perfomance =================
 infer_tp=1 # vllm
@@ -78,7 +78,7 @@ if [ ! -d "$VAL_SAVE_PATH" ]; then
     mkdir -p $VAL_SAVE_PATH
 fi
 
-python3 -m verl.trainer.main_ppo \
+    python3 -m recipe.demystify.custom_main_ppo \
     algorithm.adv_estimator=$adv_estimator \
     algorithm.use_kl_in_reward=$use_kl_in_reward \
     algorithm.kl_ctrl.kl_coef=$kl_coef \
@@ -112,6 +112,8 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.ulysses_sequence_parallel_size=$train_sp \
     actor_rollout_ref.actor.fsdp_config.param_offload=$offload \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=$offload \
+    +actor_rollout_ref.actor.fsdp_config.model_dtype=bfloat16 \
+    actor_rollout_ref.actor.fsdp_config.fsdp_size=2 \
     actor_rollout_ref.ref.log_prob_max_token_len_per_gpu=$log_prob_max_token_len_per_gpu \
     actor_rollout_ref.rollout.name=vllm \
     actor_rollout_ref.rollout.mode=async \
@@ -122,6 +124,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.multi_turn.tool_config_path=$tool_config_path \
     actor_rollout_ref.rollout.multi_turn.format=hermes \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.75 \
+    actor_rollout_ref.rollout.dtype=bfloat16 \
     actor_rollout_ref.rollout.n=$n_resp_per_prompt \
     actor_rollout_ref.rollout.val_kwargs.top_p=0.6 \
     actor_rollout_ref.rollout.val_kwargs.temperature=1.0 \

@@ -64,6 +64,7 @@ class ChatModel(BaseChatModel):
 
     tool_parser: str = "hermes"
     """Tool parser for the model"""
+    tool_parser_enable_repair: bool | None = None
 
     max_parallel_calls: int = 1
     """Max parallel tool calls"""
@@ -244,7 +245,11 @@ class ChatModel(BaseChatModel):
         prompt_ids += response_ids
         response_mask += [1] * len(response_ids)
 
-        tool_parser = ToolParser.get_tool_parser(self.tool_parser, self.tokenizer)
+        tool_parser = ToolParser.get_tool_parser(
+            self.tool_parser,
+            self.tokenizer,
+            enable_repair=self.tool_parser_enable_repair,
+        )
         content, function_calls = await tool_parser.extract_tool_calls(response_ids)
 
         tool_calls, invalid_tool_calls = [], []

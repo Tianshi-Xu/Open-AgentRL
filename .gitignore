@@ -1,12 +1,13 @@
 outputs/
-checkpoints/
+/checkpoints/
 /checkpoint/
 wandb/
 verl.egg-info/
 *.whl
-dataset/
+/dataset/
 __pycache__
-output/
+/output/
 .venv/
 amlt/
 SandboxFusion/.venv/
+/pretrained_model/
