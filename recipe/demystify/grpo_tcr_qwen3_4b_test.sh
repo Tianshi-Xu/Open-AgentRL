@@ -1,5 +1,8 @@
 set -x
-
+export SANDBOX_STATS_LOG_EVERY=80
+export VERL_TOOL_PARSER_ENABLE_REPAIR=0
+export VERL_TOOL_PARSER_ENABLE_FEEDBACK=0
+export SANDBOX_STATS_LOG_EVERY=0
 export VLLM_USE_V1=1
 # ================= data/model/tool =================
 open_agent_rl=dataset/Open-AgentRL-30K/Open-AgentRL-30K.parquet
@@ -113,7 +116,6 @@ fi
     actor_rollout_ref.actor.fsdp_config.param_offload=$offload \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=$offload \
     +actor_rollout_ref.actor.fsdp_config.model_dtype=bfloat16 \
-    actor_rollout_ref.actor.fsdp_config.fsdp_size=2 \
     actor_rollout_ref.ref.log_prob_max_token_len_per_gpu=$log_prob_max_token_len_per_gpu \
     actor_rollout_ref.rollout.name=vllm \
     actor_rollout_ref.rollout.mode=async \

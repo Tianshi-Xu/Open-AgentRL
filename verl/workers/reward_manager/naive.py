@@ -83,6 +83,9 @@ class NaiveRewardManager(AbstractRewardManager):
             extra_info = data_item.non_tensor_batch.get("extra_info", {})
             num_turns = data_item.non_tensor_batch.get("__num_turns__", None)
             extra_info["num_turns"] = num_turns
+            tool_calls = data_item.non_tensor_batch.get("tool_parser_detected_tool_calls", None)
+            if tool_calls is not None:
+                extra_info["tool_parser_detected_tool_calls"] = int(tool_calls)
 
             score = self.compute_score(
                 data_source=data_source,

@@ -15,6 +15,7 @@ import concurrent.futures  # <-- Import concurrent.futures
 import json
 import logging
 import os
+import re
 import threading
 import time
 import traceback
@@ -30,6 +31,22 @@ INITIAL_RETRY_DELAY = 1
 API_TIMEOUT = 10
 
 logger = logging.getLogger(__name__)
+
+
+_STDIN_USAGE_PATTERN = re.compile(
+    r"(\binput\s*\(|\bsys\.stdin\b|\borg\.stdin\b|\bread\s*\()",
+    re.MULTILINE,
+)
+
+
+def _code_reads_stdin(code: str) -> bool:
+    """Heuristic check to see if user code attempts to consume stdin."""
+    if not code:
+        return False
+    stripped = code.strip()
+    if not stripped:
+        return False
+    return bool(_STDIN_USAGE_PATTERN.search(stripped))
 
 # Define supported languages list (optional, for documentation or validation)
 SUPPORTED_LANGUAGES = [
@@ -195,6 +212,7 @@ def _process_single_case(
     logger.info(f"Processing test case {case_index + 1}.")
 
     current_generation_code = generation
+    code_reads_stdin = _code_reads_stdin(generation)
 
     if fn_name and language == "python":
         # Wrapper assumes stdin_data is a JSON string for function arguments.
@@ -297,6 +315,7 @@ if __name__ == '__main__':
         current_generation_code = wrapper_code
 
     stdin = None if stdin_data is None else str(stdin_data)
+    stdin_supplied = bool(stdin and stdin.strip())
     try:
         if concurrent_semaphore:
             # logger.debug(f"Case {case_index + 1}: Attempting to acquire semaphore.")
@@ -344,6 +363,10 @@ if __name__ == '__main__':
         "compile_status": None,
         "run_status": None,
     }
+    metadata["stdin_supplied"] = stdin_supplied
+    metadata["code_reads_stdin"] = code_reads_stdin
+    metadata["stdin_length"] = len(stdin) if stdin is not None else 0
+    metadata["stdin_preview"] = stdin[:160] if stdin_supplied else None
     result_status = -1  # Default error: API request error or unknown sandbox error
 
     if error_msg:
@@ -565,12 +588,18 @@ def check_correctness(
                 logger.error(f"Test case {index} generated an exception: {exc}")
                 traceback.print_exc()
                 results[index] = -1  # Mark as API/internal error
+                input_value = str(inputs[index])
+                has_input = bool(input_value.strip())
                 metadata_list[index] = {
                     "case_index": index,
-                    "input": str(inputs[index]),
+                    "input": input_value,
                     "expected_output": str(expected_outputs[index]) if expected_outputs[index] else None,
                     "api_request_error": f"Internal execution error: {exc}",
                     "status": "internal_error",
+                    "stdin_supplied": has_input,
+                    "code_reads_stdin": False,
+                    "stdin_length": len(input_value),
+                    "stdin_preview": input_value[:160] if has_input else None,
                 }
 
     # Post-processing for compile errors
@@ -584,12 +613,18 @@ def check_correctness(
                 results[i] = -4
                 # Update or create metadata for skipped cases due to compile error
                 if metadata_list[i] is None:  # If future failed before returning metadata
+                    input_value = str(inputs[i])
+                    has_input = bool(input_value.strip())
                     metadata_list[i] = {
                         "case_index": i,
-                        "input": str(inputs[i]),
+                        "input": input_value,
                         "expected_output": str(expected_outputs[i]) if expected_outputs[i] else None,
                         "api_request_error": None,
                         "status": "compile_error_skipped",  # Indicate skipped due to prior compile error
+                        "stdin_supplied": has_input,
+                        "code_reads_stdin": False,
+                        "stdin_length": len(input_value),
+                        "stdin_preview": input_value[:160] if has_input else None,
                     }
                 else:  # If future completed but result is overridden
                     metadata_list[i]["status"] = "compile_error_skipped"
@@ -623,6 +658,35 @@ def check_correctness(
         "success_rate": success_rate,
         "status_breakdown": dict(status_counter),
     }
+
+    stdin_case_info = []
+    stdin_mismatch_info = []
+    for idx, case_metadata in enumerate(metadata_list):
+        if not case_metadata:
+            continue
+        if case_metadata.get("stdin_supplied"):
+            entry = {
+                "case_index": idx,
+                "status": case_metadata.get("status"),
+                "return_code": case_metadata.get("exit_code"),
+                "code_reads_stdin": bool(case_metadata.get("code_reads_stdin")),
+            }
+            preview = case_metadata.get("stdin_preview")
+            if preview:
+                entry["stdin_preview"] = preview[:80]
+            stdin_case_info.append(entry)
+            if (
+                case_metadata.get("code_reads_stdin") is False
+                and case_metadata.get("run_status") is not None
+            ):
+                stdin_mismatch_info.append(dict(entry))
+
+    summary["stdin_supplied_cases"] = len(stdin_case_info)
+    if stdin_case_info:
+        summary["stdin_case_samples"] = stdin_case_info[:5]
+    summary["stdin_mismatch_count"] = len(stdin_mismatch_info)
+    if stdin_mismatch_info:
+        summary["stdin_mismatch_samples"] = stdin_mismatch_info[:5]
 
     logger.info("Correctness check finished. summary=%s", summary)
     if collect_stats:

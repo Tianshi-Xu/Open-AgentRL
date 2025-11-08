@@ -26,6 +26,8 @@ from verl.utils.reward_score.livecodebench import code_math
 import numpy as np
 logger = logging.getLogger(__name__)
 
+PRINT_WORD_PATTERN = re.compile(r"\bprint\b", re.IGNORECASE)
+
 
 def _to_py(x):
     if isinstance(x, np.generic):      # e.g., np.int64 / np.float64 / np.bool_
@@ -36,6 +38,60 @@ def _to_py(x):
         return [_to_py(v) for v in x]
     return x
 
+
+def _sanitize_code(code: str, code_pattern: re.Pattern[str]) -> str:
+    matches = code_pattern.findall(code)
+    if matches:
+        code = matches[0].strip()
+
+    thread_guard = "import os\nos.environ.setdefault('OPENBLAS_NUM_THREADS', '1')"
+
+    if PRINT_WORD_PATTERN.search(code):
+        return f"{thread_guard}\n{code}"
+
+    lines = code.split("\n")
+    for i, line in reversed(list(enumerate(lines))):
+        stripped = line.strip()
+        if stripped == "":
+            continue
+
+        leading_ws = len(line) - len(line.lstrip(" \t"))
+        indent = line[:leading_ws]
+        content = line[leading_ws:]
+
+        if content.startswith("print") or content.startswith("return"):
+            break
+
+        if "=\"" in content or "='" in content or "=" in content:
+            break
+
+        if content.startswith((
+            "#",
+            "@",
+            "def ",
+            "class ",
+            "for ",
+            "while ",
+            "if ",
+            "elif ",
+            "else:",
+            "try:",
+            "except ",
+            "finally:",
+            "with ",
+        )):
+            break
+
+        if indent:
+            break
+
+        lines[i] = f"{indent}print({content})"
+        break
+    code = "\n".join(lines)
+
+    return f"{thread_guard}\n{code}"
+
+
 class CustomSandboxFusionTool(SandboxFusionTool):
     def __init__(self, config: dict, tool_schema: OpenAIFunctionToolSchema):
         super().__init__(config, tool_schema)
@@ -44,19 +100,7 @@ class CustomSandboxFusionTool(SandboxFusionTool):
     @rollout_trace_op
     async def execute(self, instance_id: str, parameters: dict[str, Any], **kwargs) -> tuple[str, float, dict]:
         code = parameters["code"]
-        matches = self.code_pattern.findall(code)
-        if matches:
-            code = matches[0].strip()
-
-        # NOTE: some script may not explicitly print result, we need to add a print statement to the end of the script
-        lines = code.split("\n")
-        for i, line in reversed(list(enumerate(lines))):
-            if line == "":
-                continue
-            if not lines[i].startswith("print"):
-                lines[i] = f"print({line})"
-            break
-        code = "\n".join(lines)
+        code = _sanitize_code(code, self.code_pattern)
 
         timeout = parameters.get("timeout", self.default_timeout)
         language = parameters.get("language", self.default_language)
@@ -169,9 +213,12 @@ def compute_score(data_source, solution_str, ground_truth, extra_info):
         result = code_math.compute_score(solution_str, ground_truth)
     else:
         result = math_dapo.compute_score(solution_str=solution_str,ground_truth=ground_truth,strict_box_verify=True)
-    num_turns = int(extra_info.get("num_turns",0))
+    tool_calls = extra_info.get("tool_parser_detected_tool_calls")
+    if tool_calls is None:
+        num_turns = int(extra_info.get("num_turns",0))
+        tool_calls = max(0, (num_turns - 2) // 2)
     if result["score"] < 0:
-        tool_call_reward = (num_turns - 2) / 2 * 0.1
+        tool_call_reward = max(0, int(tool_calls)) * 0.1
         result["score"] = float(min(-0.6, result["score"] + tool_call_reward))
     if result["pred"] is None:
         result["pred"] = ""
@@ -184,7 +231,10 @@ def compute_score_outcome_reward(data_source, solution_str, ground_truth, extra_
         result = code_math.compute_score(solution_str, ground_truth)
     else:
         result = math_dapo.compute_score(solution_str=solution_str,ground_truth=ground_truth,strict_box_verify=True)
-    num_turns = int(extra_info.get("num_turns",0))
+    tool_calls = extra_info.get("tool_parser_detected_tool_calls")
+    if tool_calls is None:
+        num_turns = int(extra_info.get("num_turns",0))
+        tool_calls = max(0, (num_turns - 2) // 2)
     if result["score"] < 0:
         tool_call_reward = 0
         result["score"] = float(min(-0.6, result["score"] + tool_call_reward))

@@ -78,9 +78,48 @@ class CheckCorrectnessStatsTests(unittest.TestCase):
         self.assertAlmostEqual(summary["success_rate"], 0.5)
         self.assertEqual(summary["status_breakdown"].get("compile_error"), 1)
         self.assertEqual(summary["status_breakdown"].get("success"), 1)
+        self.assertEqual(summary.get("stdin_supplied_cases"), 2)
+        self.assertEqual(summary.get("stdin_mismatch_count"), 0)
         self.assertTrue(any(result is True for result in results))
         self.assertTrue(any(result == -4 for result in results))
         self.assertTrue(any(meta.get("status") == "compile_error" for meta in metadata))
+
+    def test_collect_stats_flags_stdin_mismatch_cases(self):
+        success_payload = {
+            "status": "Success",
+            "compile_result": None,
+            "run_result": {
+                "status": "Finished",
+                "stdout": "done",
+                "stderr": "",
+                "return_code": 0,
+                "execution_time": 0.01,
+            },
+            "files": {},
+        }
+
+        def fake_post(*args, **kwargs):
+            return FakeResponse(success_payload)
+
+        in_outs = {
+            "inputs": ["42"],
+            "outputs": ["ok"],
+        }
+
+        with patch("verl.utils.reward_score.sandbox_fusion.utils.requests.post", side_effect=fake_post):
+            _, _, summary = sandbox_utils.check_correctness(
+                sandbox_fusion_url=self.sandbox_url,
+                in_outs=in_outs,
+                generation="print('hi')",
+                timeout=5,
+                collect_stats=True,
+            )
+
+        self.assertEqual(summary.get("stdin_supplied_cases"), 1)
+        self.assertEqual(summary.get("stdin_mismatch_count"), 1)
+        samples = summary.get("stdin_mismatch_samples", [])
+        self.assertTrue(samples)
+        self.assertEqual(samples[0]["case_index"], 0)
 
 
 class ComputeScoreRobustnessTests(unittest.TestCase):

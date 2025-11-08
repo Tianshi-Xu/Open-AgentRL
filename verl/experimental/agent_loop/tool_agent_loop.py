@@ -71,6 +71,24 @@ class ToolAgentLoop(AgentLoopBase):
         )
         print(f"Initialized tools: {cls.tools}")
 
+        feedback_override = getattr(
+            config.actor_rollout_ref.rollout.multi_turn,
+            "tool_parser_enable_feedback",
+            None,
+        )
+        if feedback_override is None:
+            env_feedback = os.getenv("VERL_TOOL_PARSER_ENABLE_FEEDBACK")
+            cls.tool_parser_enable_feedback = (
+                True
+                if env_feedback is None
+                else env_feedback.lower() not in {"0", "false", "no"}
+            )
+        else:
+            if isinstance(feedback_override, str):
+                cls.tool_parser_enable_feedback = feedback_override.lower() not in {"0", "false", "no"}
+            else:
+                cls.tool_parser_enable_feedback = bool(feedback_override)
+
         cls.apply_chat_template_kwargs = config.data.get("apply_chat_template_kwargs", {})
         cls.prompt_length = config.actor_rollout_ref.rollout.prompt_length
         cls.response_length = config.actor_rollout_ref.rollout.response_length
@@ -114,6 +132,10 @@ class ToolAgentLoop(AgentLoopBase):
         tools_kwargs = kwargs.get("tools_kwargs", {})
 
         user_turns, assistant_turns = 0, 0
+        parser_error_messages: list[str] = []
+        parser_error_count = 0
+        parser_attempts = 0
+        parsed_tool_call_count = 0
         while True:
             with simple_timer("generate_sequences", metrics):
                 output = await self.server_manager.generate(
@@ -140,9 +162,27 @@ class ToolAgentLoop(AgentLoopBase):
 
             # Parse tool calls from LLM response
             _, tool_calls, parser_errors = await self.tool_parser.extract_tool_calls(response_ids)
+            if tool_calls or parser_errors:
+                parser_attempts += 1
+            if parser_errors:
+                parser_error_messages.extend(parser_errors)
+                parser_error_count += len(parser_errors)
+            if parser_attempts and parser_attempts % 200 == 0 and logger.isEnabledFor(logging.INFO):
+                error_rate = parser_error_count / parser_attempts if parser_attempts else 0.0
+                sample_error = parser_error_messages[-1][:120] if parser_error_messages else ""
+                logger.info(
+                    "Tool parser stats (recent %d attempts): total_errors=%d detected_calls=%d error_rate=%.3f last_error='%s'",
+                    parser_attempts,
+                    parser_error_count,
+                    parsed_tool_call_count,
+                    error_rate,
+                    sample_error,
+                )
+            if tool_calls:
+                parsed_tool_call_count += len(tool_calls)
 
             tool_messages: list[dict[str, Any]] = []
-            if parser_errors:
+            if parser_errors and self.tool_parser_enable_feedback:
                 tool_messages.extend(
                     {
                         "role": "tool",
@@ -233,6 +273,14 @@ class ToolAgentLoop(AgentLoopBase):
             response_logprobs=response_logprobs[: self.response_length] if response_logprobs else None,
             num_turns=user_turns + assistant_turns + 1,
             metrics=metrics,
+        )
+        output.extra_fields.update(
+            {
+                "tool_parser_error_count": parser_error_count,
+                "tool_parser_attempts": parser_attempts,
+                "tool_parser_error_messages": parser_error_messages,
+                "tool_parser_detected_tool_calls": parsed_tool_call_count,
+            }
         )
         return output
 

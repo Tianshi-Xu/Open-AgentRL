@@ -586,14 +586,34 @@ class AgentLoopWorker:
 
         # add reward_extra_info to non_tensor_batch
         reward_extra_infos = [input.extra_fields.get("reward_extra_info", {}) for input in inputs]
-        reward_extra_keys = list(reward_extra_infos[0].keys())
-        for key in reward_extra_keys:
-            non_tensor_batch[key] = np.array([info[key] for info in reward_extra_infos])
+        reward_extra_keys: list[str] = []
+        if reward_extra_infos:
+            all_keys = set()
+            for info in reward_extra_infos:
+                all_keys.update(info.keys())
+            reward_extra_keys = sorted(all_keys)
+            for key in reward_extra_keys:
+                non_tensor_batch[key] = np.array([info.get(key, None) for info in reward_extra_infos], dtype=object)
 
         # Add multi_modal_inputs to non_tensor_batch if any samples have them
         multi_modal_inputs_list = [input.multi_modal_inputs for input in inputs]
         if any(mmi is not None for mmi in multi_modal_inputs_list):
             non_tensor_batch["multi_modal_inputs"] = np.array(multi_modal_inputs_list, dtype=object)
+
+        non_tensor_batch["tool_parser_error_count"] = np.array(
+            [input.extra_fields.get("tool_parser_error_count", 0) for input in inputs], dtype=np.int32
+        )
+        non_tensor_batch["tool_parser_attempts"] = np.array(
+            [input.extra_fields.get("tool_parser_attempts", 0) for input in inputs], dtype=np.int32
+        )
+        non_tensor_batch["tool_parser_detected_tool_calls"] = np.array(
+            [input.extra_fields.get("tool_parser_detected_tool_calls", 0) for input in inputs], dtype=np.int32
+        )
+        parser_error_messages = np.empty(len(inputs), dtype=object)
+        for idx, item in enumerate(inputs):
+            messages = item.extra_fields.get("tool_parser_error_messages", [])
+            parser_error_messages[idx] = messages if messages is not None else []
+        non_tensor_batch["tool_parser_error_messages"] = parser_error_messages
 
         metrics = [input.metrics.model_dump() for input in inputs]
         return DataProto(
@@ -731,6 +751,26 @@ class AgentLoopManager:
                 for worker, chunk in zip(self.agent_loop_workers, chunkes, strict=True)
             ]
         )
+        if outputs:
+            all_non_tensor_keys: set[str] = set()
+            reward_extra_keys_union: set[str] = set()
+            for output in outputs:
+                if output.non_tensor_batch:
+                    all_non_tensor_keys.update(output.non_tensor_batch.keys())
+                reward_extra_keys_union.update(output.meta_info.get("reward_extra_keys", []))
+
+            for output in outputs:
+                batch_len = len(output)
+                if output.non_tensor_batch is None:
+                    output.non_tensor_batch = {}
+                for key in all_non_tensor_keys:
+                    if key not in output.non_tensor_batch:
+                        if key == "__num_turns__":
+                            output.non_tensor_batch[key] = np.zeros(batch_len, dtype=np.int32)
+                        else:
+                            output.non_tensor_batch[key] = np.full(batch_len, None, dtype=object)
+                if reward_extra_keys_union:
+                    output.meta_info["reward_extra_keys"] = sorted(reward_extra_keys_union)
         output = DataProto.concat(outputs)
         if self.config.actor_rollout_ref.rollout.free_cache_engine:
             self.sleep()

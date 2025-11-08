@@ -3,7 +3,7 @@ description: open-agentrl-qwen3-4b-rl
 target:
   service: sing
   workspace_name: srgxws
-  name: msrresrchbasicvc
+  name: msrresrchvc
 
 environment:
   image: verl-sandbox:v2
@@ -33,7 +33,7 @@ code:
 
 jobs:
 - name: open-agentrl-qwen3-4b-rl-test
-  sku: 1x80G8
+  sku: 1x80G4
   identity: managed
   priority: high
   submit_args:
@@ -42,8 +42,9 @@ jobs:
       _AZUREML_SINGULARITY_JOB_UAI: /subscriptions/e546c811-2312-46e2-9fd0-c949c65da4d9/resourcegroups/srgx/providers/Microsoft.ManagedIdentity/userAssignedIdentities/srgxuai
       SANDBOX_LOG_LEVEL: "INFO"
       VERL_LOGGING_LEVEL: "INFO"
-      SANDBOX_STATS_LOG_EVERY: "80"
-      VERL_TOOL_PARSER_ENABLE_REPAIR: "0"
+      VERL_TOOL_PARSER_ENABLE_REPAIR: "1"
+      SANDBOX_STATS_LOG_EVERY: "1000"
+      SANDBOX_STATS_LOG_SECONDS: "0"
   command:
     - cat sing_rl_fast.yml
     - source /opt/miniforge3/etc/profile.d/conda.sh

@@ -111,6 +111,10 @@ Next, configure the Agentic RL scripts [grpo_tcr_qwen2_7b.sh](recipe/demystify/g
 - **aime2024/aime2025**: Benchmark datasets evaluated every 10 training steps. Set the absolute paths to the `.parquet` files of the benchmarks. You can also add more benchmarks like GPQA-Diamond in **test_files**
 - **default_local_dir**: Directory to save your RL checkpoints
 
+Optional environment toggles for multi-turn tool parsing:
+- `VERL_TOOL_PARSER_ENABLE_REPAIR`: enable relaxed JSON repair (default `1`). Set to `0` to require strictly valid tool calls.
+- `VERL_TOOL_PARSER_ENABLE_FEEDBACK`: control whether parser errors are echoed back to the model (default `1`). Set to `0` to silence error feedback.
+
 **Training Resources**: We conducted our training on one $8\times \text{Tesla-A100}$ node with a batch size of 64.
 
 After finishing the configurations, run the code below to conduct Agentic RL with the GRPO-TCR recipe:
