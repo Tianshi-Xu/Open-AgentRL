@@ -2,7 +2,6 @@ set -x
 export SANDBOX_STATS_LOG_EVERY=80
 export VERL_TOOL_PARSER_ENABLE_REPAIR=0
 export VERL_TOOL_PARSER_ENABLE_FEEDBACK=0
-export SANDBOX_STATS_LOG_EVERY=0
 export VLLM_USE_V1=1
 # ================= data/model/tool =================
 open_agent_rl=dataset/Open-AgentRL-30K/Open-AgentRL-30K.parquet
@@ -50,14 +49,14 @@ overlong_penalty_factor=1.0
 
 
 max_turns=16
-max_prompt_length=2560
-max_response_length=20480
+max_prompt_length=1280
+max_response_length=10240
 actor_lr=1e-6
 
-train_batch_size=64
-ppo_mini_batch_size=16
-n_resp_per_prompt=16
-n_resp_per_prompt_val=32
+train_batch_size=2
+ppo_mini_batch_size=2
+n_resp_per_prompt=2
+n_resp_per_prompt_val=2
 
 # ================= perfomance =================
 infer_tp=1 # vllm
@@ -113,9 +112,6 @@ fi
     actor_rollout_ref.actor.ppo_mini_batch_size=$ppo_mini_batch_size \
     actor_rollout_ref.actor.ppo_max_token_len_per_gpu=$actor_max_token_len_per_gpu \
     actor_rollout_ref.actor.ulysses_sequence_parallel_size=$train_sp \
-    actor_rollout_ref.actor.fsdp_config.param_offload=$offload \
-    actor_rollout_ref.actor.fsdp_config.optimizer_offload=$offload \
-    +actor_rollout_ref.actor.fsdp_config.model_dtype=bfloat16 \
     actor_rollout_ref.ref.log_prob_max_token_len_per_gpu=$log_prob_max_token_len_per_gpu \
     actor_rollout_ref.rollout.name=vllm \
     actor_rollout_ref.rollout.mode=async \
@@ -126,7 +122,6 @@ fi
     actor_rollout_ref.rollout.multi_turn.tool_config_path=$tool_config_path \
     actor_rollout_ref.rollout.multi_turn.format=hermes \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.75 \
-    actor_rollout_ref.rollout.dtype=bfloat16 \
     actor_rollout_ref.rollout.n=$n_resp_per_prompt \
     actor_rollout_ref.rollout.val_kwargs.top_p=0.6 \
     actor_rollout_ref.rollout.val_kwargs.temperature=1.0 \
@@ -147,4 +142,12 @@ fi
     trainer.save_freq=30 \
     trainer.default_local_dir=$default_local_dir \
     trainer.test_freq=10 \
-    trainer.total_epochs=3 $@
+    trainer.total_epochs=3 $@ \
+    actor_rollout_ref.model.use_fused_kernels=True \
+    actor_rollout_ref.model.fused_kernel_options.impl_backend=triton \
+    actor_rollout_ref.rollout.dtype=bfloat16 \
+    actor_rollout_ref.actor.strategy=fsdp2 \
+    actor_rollout_ref.actor.fsdp_config.offload_policy=$offload \
+    # +actor_rollout_ref.actor.fsdp_config.model_dtype=bfloat16 \
+    # actor_rollout_ref.actor.fsdp_config.param_offload=$offload \
+    # actor_rollout_ref.actor.fsdp_config.optimizer_offload=$offload \

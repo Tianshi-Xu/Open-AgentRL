@@ -39,7 +39,7 @@ kl_loss_coef=0.0
 
 # clip higher ✓
 clip_ratio_low=0.2
-clip_ratio_high=0.35
+clip_ratio_high=0.28
 
 # loss agg ✓
 loss_agg_mode="token-mean"
@@ -58,16 +58,16 @@ overlong_penalty_factor=1.0
 
 max_turns=16
 max_prompt_length=2560
-max_response_length=20480
+max_response_length=10240
 actor_lr=1e-6
 
 train_batch_size=64
-ppo_mini_batch_size=16
-n_resp_per_prompt=16
+ppo_mini_batch_size=32
+n_resp_per_prompt=32
 n_resp_per_prompt_val=32
 
 # ================= perfomance =================
-infer_tp=4 # vllm
+infer_tp=1 # vllm
 train_sp=4 # train
 offload=True
 
@@ -125,8 +125,6 @@ fi
     actor_rollout_ref.actor.ppo_mini_batch_size=$ppo_mini_batch_size \
     actor_rollout_ref.actor.ppo_max_token_len_per_gpu=$actor_max_token_len_per_gpu \
     actor_rollout_ref.actor.ulysses_sequence_parallel_size=$train_sp \
-    actor_rollout_ref.actor.fsdp_config.param_offload=$offload \
-    actor_rollout_ref.actor.fsdp_config.optimizer_offload=$offload \
     actor_rollout_ref.ref.log_prob_max_token_len_per_gpu=$log_prob_max_token_len_per_gpu \
     actor_rollout_ref.rollout.name=vllm \
     actor_rollout_ref.rollout.mode=async \
@@ -136,12 +134,15 @@ fi
     actor_rollout_ref.rollout.multi_turn.max_assistant_turns=$max_turns \
     actor_rollout_ref.rollout.multi_turn.tool_config_path=$tool_config_path \
     actor_rollout_ref.rollout.multi_turn.format=hermes \
-    actor_rollout_ref.rollout.gpu_memory_utilization=0.75 \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.8 \
     actor_rollout_ref.rollout.n=$n_resp_per_prompt \
     actor_rollout_ref.rollout.val_kwargs.top_p=0.6 \
     actor_rollout_ref.rollout.val_kwargs.temperature=1.0 \
     actor_rollout_ref.rollout.val_kwargs.n=$n_resp_per_prompt_val \
+    actor_rollout_ref.rollout.max_num_batched_tokens=$((32768 * 2)) \
+    actor_rollout_ref.rollout.max_num_seqs=256 \
     reward_model.reward_manager=${reward_manager} \
+    actor_rollout_ref.rollout.over_sample_rate=0.1 \
     +reward_model.reward_kwargs.overlong_buffer_cfg.enable=${enable_overlong_buffer} \
     +reward_model.reward_kwargs.overlong_buffer_cfg.len=${overlong_buffer_len} \
     +reward_model.reward_kwargs.overlong_buffer_cfg.penalty_factor=${overlong_penalty_factor} \
@@ -154,9 +155,11 @@ fi
     trainer.val_before_train=True \
     trainer.log_val_generations=20 \
     trainer.nnodes=1 \
-    trainer.save_freq=10 \
+    trainer.save_freq=30 \
     trainer.default_local_dir=$default_local_dir \
     trainer.test_freq=10 \
     trainer.total_epochs=3 $@ \
-    actor_rollout_ref.rollout.dtype=float16 \
-    +actor_rollout_ref.actor.fsdp_config.model_dtype=float16 \
+    actor_rollout_ref.rollout.dtype=bfloat16 \
+    actor_rollout_ref.actor.strategy=fsdp2 \
+    actor_rollout_ref.actor.fsdp_config.offload_policy=$offload \
+    +actor_rollout_ref.rollout.engine_kwargs.vllm.kv_cache_dtype=fp8

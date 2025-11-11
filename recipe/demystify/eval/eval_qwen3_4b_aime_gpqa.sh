@@ -2,11 +2,11 @@ set -x
 
 export VLLM_USE_V1=1
 # ================= data/model/tool =================
-open_agent_rl=/path/to/your/dataset/Gen-Verse/Open-AgentRL-30K/Open-AgentRL-30K.parquet
-gpqa_diamond=/path/to/your/dataset/Gen-Verse/Open-AgentRL-Eval/gpqa-diamond/gpqa_diamond.parquet
-aime_2024=/path/to/your/dataset/Gen-Verse/Open-AgentRL-Eval/aime2024/aime_2024_problems.parquet
-aime_2025=/path/to/your/dataset/Gen-Verse/Open-AgentRL-Eval/aime2025/aime_2025_problems.parquet
-model_path=/path/to/your/models/Gen-Verse/DemyAgent-4B
+open_agent_rl=dataset/Open-AgentRL-30K/Open-AgentRL-30K.parquet
+gpqa_diamond=dataset/Open-AgentRL-Eval/gpqa-diamond/gpqa_diamond.parquet
+aime_2024=dataset/Open-AgentRL-Eval/aime2024/aime_2024_problems.parquet
+aime_2025=dataset/Open-AgentRL-Eval/aime2025/aime_2025_problems.parquet
+model_path=/app/pretrained_model/DemyAgent-4B
 
 train_files="['$open_agent_rl']"
 test_files="['$gpqa_diamond','$aime_2024','$aime_2025']"
@@ -58,8 +58,8 @@ n_resp_per_prompt=16
 n_resp_per_prompt_val=32
 
 # ================= perfomance =================
-infer_tp=4 # vllm
-train_sp=4 # train
+infer_tp=1 # vllm
+train_sp=1 # train
 offload=True
 
 actor_max_token_len_per_gpu=$(( (max_prompt_length + max_response_length) * 1 ))
@@ -135,7 +135,7 @@ python3 -m verl.trainer.main_ppo \
     trainer.logger=['console','wandb'] \
     trainer.project_name=$project_name \
     trainer.experiment_name=$experiment_name \
-    trainer.n_gpus_per_node=8 \
+    trainer.n_gpus_per_node=1 \
     trainer.val_before_train=True \
     trainer.validation_data_dir=${VAL_SAVE_PATH} \
     trainer.log_val_generations=20 \
@@ -144,4 +144,8 @@ python3 -m verl.trainer.main_ppo \
     trainer.default_local_dir=$default_local_dir \
     trainer.total_training_steps=1 \
     trainer.test_freq=10 \
-    trainer.total_epochs=1 $@
+    trainer.total_epochs=1 $@ \
+    +actor_rollout_ref.actor.fsdp_config.model_dtype=bfloat16 \
+    actor_rollout_ref.rollout.dtype=bfloat16 \
+    actor_rollout_ref.model.use_fused_kernels=True \
+    actor_rollout_ref.model.fused_kernel_options.impl_backend=triton \

@@ -1193,6 +1193,48 @@ class RayPPOTrainer:
                             config=self.config.algorithm,
                         )
 
+                        # # Filter out samples with all-zero advantages
+                        # advantages = batch.batch["advantages"]
+                        # response_mask = batch.batch["response_mask"]
+                        
+                        # # Compute per-sample advantage sum (only in response region)
+                        # masked_advantages = advantages * response_mask
+                        # per_sample_adv_sum = masked_advantages.sum(dim=-1).abs()
+                        
+                        # # Find samples with non-zero advantages
+                        # non_zero_mask = per_sample_adv_sum > 1e-8
+                        # num_total = len(batch)
+                        # num_non_zero = non_zero_mask.sum().item()
+                        # num_zero = num_total - num_non_zero
+                        # zero_ratio = num_zero / num_total if num_total > 0 else 0.0
+                        
+                        # # Log statistics
+                        # print(f"[Step {self.global_steps}] Advantage filtering: {num_zero}/{num_total} ({zero_ratio:.2%}) samples have all-zero advantages")
+                        
+                        # # Skip this batch if all samples have zero advantages
+                        # if num_non_zero == 0:
+                        #     print(f"[Step {self.global_steps}] WARNING: All samples have zero advantages! Skipping this batch entirely.")
+                        #     metrics.update({
+                        #         "training/skipped_batch": 1,
+                        #         "training/zero_advantage_ratio": zero_ratio,
+                        #     })
+                        #     # Log metrics and continue to next batch
+                        #     logger.log(data=metrics, step=self.global_steps)
+                        #     progress_bar.update(1)
+                        #     self.global_steps += 1
+                        #     continue
+                        
+                        # # Filter batch to keep only non-zero advantage samples
+                        # if num_non_zero < num_total:
+                        #     batch = batch.select_idxs(non_zero_mask)
+                        #     print(f"[Step {self.global_steps}] After filtering: batch size reduced from {num_total} to {num_non_zero}")
+                        
+                        # # Log filtering statistics
+                        # metrics.update({
+                        #     "training/zero_advantage_ratio": zero_ratio,
+                        #     "training/filtered_samples": num_zero,
+                        # })
+
                     # update critic
                     if self.use_critic:
                         with marked_timer("update_critic", timing_raw, color="pink"):

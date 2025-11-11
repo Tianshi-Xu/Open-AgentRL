@@ -588,12 +588,13 @@ def check_correctness(
                 logger.error(f"Test case {index} generated an exception: {exc}")
                 traceback.print_exc()
                 results[index] = -1  # Mark as API/internal error
-                input_value = str(inputs[index])
+                input_value = str(inputs[index]) if index < len(inputs) else ""
+                expected_out = str(expected_outputs[index]) if index < len(expected_outputs) and expected_outputs[index] else None
                 has_input = bool(input_value.strip())
                 metadata_list[index] = {
                     "case_index": index,
                     "input": input_value,
-                    "expected_output": str(expected_outputs[index]) if expected_outputs[index] else None,
+                    "expected_output": expected_out,
                     "api_request_error": f"Internal execution error: {exc}",
                     "status": "internal_error",
                     "stdin_supplied": has_input,
@@ -613,12 +614,13 @@ def check_correctness(
                 results[i] = -4
                 # Update or create metadata for skipped cases due to compile error
                 if metadata_list[i] is None:  # If future failed before returning metadata
-                    input_value = str(inputs[i])
+                    input_value = str(inputs[i]) if i < len(inputs) else ""
+                    expected_out = str(expected_outputs[i]) if i < len(expected_outputs) and expected_outputs[i] else None
                     has_input = bool(input_value.strip())
                     metadata_list[i] = {
                         "case_index": i,
                         "input": input_value,
-                        "expected_output": str(expected_outputs[i]) if expected_outputs[i] else None,
+                        "expected_output": expected_out,
                         "api_request_error": None,
                         "status": "compile_error_skipped",  # Indicate skipped due to prior compile error
                         "stdin_supplied": has_input,
@@ -683,12 +685,22 @@ def check_correctness(
 
     summary["stdin_supplied_cases"] = len(stdin_case_info)
     if stdin_case_info:
-        summary["stdin_case_samples"] = stdin_case_info[:5]
+        summary["stdin_case_samples"] = stdin_case_info[:2]
     summary["stdin_mismatch_count"] = len(stdin_mismatch_info)
     if stdin_mismatch_info:
-        summary["stdin_mismatch_samples"] = stdin_mismatch_info[:5]
+        summary["stdin_mismatch_samples"] = stdin_mismatch_info[:2]
 
     logger.info("Correctness check finished. summary=%s", summary)
+    
+    # Log stdin statistics if SANDBOX_STATS_LOG_EVERY is set
+    if os.getenv("SANDBOX_STATS_LOG_EVERY") and len(stdin_case_info) > 0:
+        logger.info(
+            "[sandbox.stdin.stats] stdin_supplied=%d, stdin_mismatch=%d, stdin_mismatch_samples=%s",
+            len(stdin_case_info),
+            len(stdin_mismatch_info),
+            stdin_mismatch_info[:2] if stdin_mismatch_info else []
+        )
+    
     if collect_stats:
         return results, metadata_list, summary
     return results, metadata_list

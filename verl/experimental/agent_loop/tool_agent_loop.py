@@ -27,7 +27,7 @@ from verl.utils.profiler import simple_timer
 from verl.utils.rollout_trace import rollout_trace_op
 
 logger = logging.getLogger(__file__)
-logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
+logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "INFO"))
 
 TOOL_NAME_ALIASES: dict[str, str] = {
     "code_interation": "code_interpreter",
@@ -37,6 +37,13 @@ TOOL_NAME_ALIASES: dict[str, str] = {
 
 @register("tool_agent")
 class ToolAgentLoop(AgentLoopBase):
+    # Class-level statistics for tool parser (per-process)
+    _parser_error_count = 0
+    _parser_attempts = 0
+    _parsed_tool_call_count = 0
+    _last_parser_errors: list[str] = []
+    _last_stats_print_at = 0  # Track when we last printed stats
+    
     @classmethod
     def init_class(cls, config, tokenizer, processor, **kwargs):
         if cls._class_initialized:
@@ -79,7 +86,7 @@ class ToolAgentLoop(AgentLoopBase):
         if feedback_override is None:
             env_feedback = os.getenv("VERL_TOOL_PARSER_ENABLE_FEEDBACK")
             cls.tool_parser_enable_feedback = (
-                True
+                False
                 if env_feedback is None
                 else env_feedback.lower() not in {"0", "false", "no"}
             )
@@ -132,6 +139,7 @@ class ToolAgentLoop(AgentLoopBase):
         tools_kwargs = kwargs.get("tools_kwargs", {})
 
         user_turns, assistant_turns = 0, 0
+        ### Parser stats by XTS
         parser_error_messages: list[str] = []
         parser_error_count = 0
         parser_attempts = 0
@@ -162,24 +170,40 @@ class ToolAgentLoop(AgentLoopBase):
 
             # Parse tool calls from LLM response
             _, tool_calls, parser_errors = await self.tool_parser.extract_tool_calls(response_ids)
+            
+            # Update class-level statistics
             if tool_calls or parser_errors:
                 parser_attempts += 1
+                ToolAgentLoop._parser_attempts += 1
             if parser_errors:
                 parser_error_messages.extend(parser_errors)
                 parser_error_count += len(parser_errors)
-            if parser_attempts and parser_attempts % 200 == 0 and logger.isEnabledFor(logging.INFO):
-                error_rate = parser_error_count / parser_attempts if parser_attempts else 0.0
-                sample_error = parser_error_messages[-1][:120] if parser_error_messages else ""
-                logger.info(
-                    "Tool parser stats (recent %d attempts): total_errors=%d detected_calls=%d error_rate=%.3f last_error='%s'",
-                    parser_attempts,
-                    parser_error_count,
-                    parsed_tool_call_count,
+                ToolAgentLoop._parser_error_count += len(parser_errors)
+                ToolAgentLoop._last_parser_errors.extend(parser_errors)
+                # Keep only last 100 errors to avoid memory issues
+                if len(ToolAgentLoop._last_parser_errors) > 100:
+                    ToolAgentLoop._last_parser_errors = ToolAgentLoop._last_parser_errors[-100:]
+            if tool_calls:
+                parsed_tool_call_count += len(tool_calls)
+                ToolAgentLoop._parsed_tool_call_count += len(tool_calls)
+            
+            # Print statistics every 2000 attempts at class level (per-process)
+            # Only print if there are new attempts since last print
+            if (ToolAgentLoop._parser_attempts > 0 and 
+                ToolAgentLoop._parser_attempts % 2000 == 0 and
+                ToolAgentLoop._parser_attempts != ToolAgentLoop._last_stats_print_at):
+                error_rate = ToolAgentLoop._parser_error_count / ToolAgentLoop._parser_attempts if ToolAgentLoop._parser_attempts else 0.0
+                sample_error = ToolAgentLoop._last_parser_errors[-1][:120] if ToolAgentLoop._last_parser_errors else ""
+                logger.warning(
+                    "[PID:%s] Tool parser stats (total %d attempts): total_errors=%d detected_calls=%d error_rate=%.3f last_error='%s'",
+                    os.getpid(),
+                    ToolAgentLoop._parser_attempts,
+                    ToolAgentLoop._parser_error_count,
+                    ToolAgentLoop._parsed_tool_call_count,
                     error_rate,
                     sample_error,
                 )
-            if tool_calls:
-                parsed_tool_call_count += len(tool_calls)
+                ToolAgentLoop._last_stats_print_at = ToolAgentLoop._parser_attempts
 
             tool_messages: list[dict[str, Any]] = []
             if parser_errors and self.tool_parser_enable_feedback:

@@ -213,7 +213,7 @@ def compute_score(data_source, solution_str, ground_truth, extra_info):
         result = code_math.compute_score(solution_str, ground_truth)
     else:
         result = math_dapo.compute_score(solution_str=solution_str,ground_truth=ground_truth,strict_box_verify=True)
-    tool_calls = extra_info.get("tool_parser_detected_tool_calls")
+    tool_calls = extra_info.get("tool_parser_detected_tool_calls", None)
     if tool_calls is None:
         num_turns = int(extra_info.get("num_turns",0))
         tool_calls = max(0, (num_turns - 2) // 2)

@@ -400,7 +400,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             param_dtype = torch.bfloat16
             reduce_dtype = torch.float32
             buffer_dtype = torch.float32
-
+        
         mixed_precision = MixedPrecision(param_dtype=param_dtype, reduce_dtype=reduce_dtype, buffer_dtype=buffer_dtype)
 
         auto_wrap_policy = get_fsdp_wrap_policy(
@@ -511,7 +511,10 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         else:
             actor_optimizer = None
             actor_lr_scheduler = None
-
+        # print(f"FSDP mixed precision: param {param_dtype}, reduce {reduce_dtype}, buffer {buffer_dtype}")
+        # print("model.param.dtype:", next(actor_module_fsdp.parameters()).dtype)
+        # print("optimizer.param.dtype:", actor_optimizer.param_groups[0]["params"][0].dtype if actor_optimizer else None)
+        # exit(0)
         return actor_module_fsdp, actor_optimizer, actor_lr_scheduler, actor_model_config
 
     def _build_rollout(self, trust_remote_code=False):

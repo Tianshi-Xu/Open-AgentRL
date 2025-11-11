@@ -40,15 +40,17 @@ jobs:
     env:
       NCCL_DEBUG: "ERROR"
       _AZUREML_SINGULARITY_JOB_UAI: /subscriptions/e546c811-2312-46e2-9fd0-c949c65da4d9/resourcegroups/srgx/providers/Microsoft.ManagedIdentity/userAssignedIdentities/srgxuai
-      SANDBOX_LOG_LEVEL: "INFO"
+      SANDBOX_LOG_LEVEL: "WARN"
       VERL_LOGGING_LEVEL: "INFO"
       VERL_TOOL_PARSER_ENABLE_REPAIR: "1"
       SANDBOX_STATS_LOG_EVERY: "1000"
       SANDBOX_STATS_LOG_SECONDS: "0"
+      VERL_TOOL_PARSER_ENABLE_FEEDBACK: "0"
   command:
     - cat sing_rl_fast.yml
     - source /opt/miniforge3/etc/profile.d/conda.sh
     - conda activate sandbox-runtime
+    - pip install Bio
     - cd ./SandboxFusion
     # - curl -sSL https://install.python-poetry.org | python -
     # - poetry install
