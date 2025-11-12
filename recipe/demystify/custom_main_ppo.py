@@ -26,7 +26,7 @@ from omegaconf import DictConfig, OmegaConf
 from verl.trainer.main_ppo import run_ppo
 
 
-@hydra.main(config_path="../../verl/trainer/config", config_name="ppo_trainer", version_base=None)
+@hydra.main(config_path="../../verl/verl/trainer/config", config_name="ppo_trainer", version_base=None)
 def main(config: DictConfig):
     # 1. Login to wandb with your key
     wandb_key = os.environ.get("WANDB_API_KEY", None)

@@ -1,0 +1,66 @@
+description: open-agentrl-qwen3-4b-rl
+
+target:
+  service: sing
+  workspace_name: srgxws
+  name: msrresrchvc
+
+environment:
+  image: verl-sandbox:v2
+  registry: srgxacr.azurecr.io
+
+data:
+    local_dir: /home/v-tianshixu/pretrained_model/Qwen3-4B-RA-SFT
+    remote_dir: pretrained_model/
+
+code:
+  local_dir: $CONFIG_DIR
+  ignore:
+    - .git
+    - /checkpoints/
+    - /checkpoint/
+    - wandb/
+    - verl.egg-info/
+    - __pycache__/
+    - .venv/
+    - amlt/
+    - /outputs/
+    - figs/
+    - /output/
+    - flash_attn-2.7.4.post1+cu12torch2.7cxx11abiFALSE-cp311-cp311-linux_x86_64.whl
+    - flash_attn-2.7.4.post1+cu12torch2.6cxx11abiFALSE-cp311-cp311-linux_x86_64.whl
+    - /pretrained_model/
+
+jobs:
+- name: open-agentrl-qwen3-4b-rl-test
+  sku: 1x80G4
+  identity: managed
+  priority: high
+  submit_args:
+    env:
+      NCCL_DEBUG: "ERROR"
+      _AZUREML_SINGULARITY_JOB_UAI: /subscriptions/e546c811-2312-46e2-9fd0-c949c65da4d9/resourcegroups/srgx/providers/Microsoft.ManagedIdentity/userAssignedIdentities/srgxuai
+      SANDBOX_LOG_LEVEL: "WARN"
+      VERL_LOGGING_LEVEL: "INFO"
+      VERL_TOOL_PARSER_ENABLE_REPAIR: "1"
+      SANDBOX_STATS_LOG_EVERY: "1000"
+      SANDBOX_STATS_LOG_SECONDS: "0"
+      VERL_TOOL_PARSER_ENABLE_FEEDBACK: "0"
+  command:
+    - cat sing_rl_fast.yml
+    - source /opt/miniforge3/etc/profile.d/conda.sh
+    - conda activate sandbox-runtime
+    - pip install Bio
+    - cd ./SandboxFusion
+    # - curl -sSL https://install.python-poetry.org | python -
+    # - poetry install
+    - mkdir -p docs/build
+    - make test-case CASE=test_python_assert
+    - stdbuf -oL -eL make run-online 2>&1 | tee /tmp/sandboxfusion.log &
+    - sleep 5
+    - bash test.sh
+    - cd ..
+    - conda activate verl-env
+    - which python
+    - cat recipe/demystify/grpo_tcr_qwen3_4b.sh
+    - bash recipe/demystify/grpo_tcr_qwen3_4b.sh

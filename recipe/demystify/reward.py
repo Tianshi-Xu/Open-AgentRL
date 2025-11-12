@@ -206,7 +206,7 @@ class CustomRLHFDataset(RLHFDataset):
         return row
 
 
-def compute_score(data_source, solution_str, ground_truth, extra_info):
+def compute_score(data_source, solution_str, ground_truth, extra_info, reward_router_address, reward_model_tokenizer):
     # use \\boxed{...} answer
     ds = (data_source or "").lower()
     if 'code' in ds:
@@ -224,7 +224,7 @@ def compute_score(data_source, solution_str, ground_truth, extra_info):
         result["pred"] = ""
     return result
 
-def compute_score_outcome_reward(data_source, solution_str, ground_truth, extra_info):
+def compute_score_outcome_reward(data_source, solution_str, ground_truth, extra_info, reward_router_address, reward_model_tokenizer):
     # use \\boxed{...} answer
     ds = (data_source or "").lower()
     if 'code' in ds:
