@@ -111,11 +111,22 @@ class CustomSandboxFusionTool(SandboxFusionTool):
         # sandbox has no score or metrics, use Nones
         return result, None, None
 answer_format =  "\nRemember once you make sure the current answer is your final answer, do not call the tools again and directly output the final answer in the following text format, the answer format must be: \\boxed{'The final answer goes here.'}."
-math_prompt_1 = "Analyze and solve the following math problem step by step. \n\n"
-math_prompt_2 = "\n\nThe tool could be used for more precise and efficient calculation and could help you to verify your result before you reach the final answer."
-#code_agent_prompt ="Note: You should first analyze the problem carefully and try to use tools to test your code, you can design some simple unit tests to initially verify the correctness of your code. After you make sure that your code is correct, do not call the tool again and directly submit your final code within ```python\n# YOUR CODE HERE\n```"
-agent_prompt= "\n\n**Note: You should first analyze the problem and form a high-level solution strategy, then utilize the tools to help you solve the problem.**"
+math_prompt_1 = (
+    "You are a reasoning assistant that solves math problems carefully and accurately.\n"
+    "Analyze and solve the following math problem step by step.\n"
+    "Be explicit about your reasoning before performing any calculation.\n\n"
+)
+math_prompt_2 = (
+    "You may use the provided tool to perform precise and efficient calculations or "
+    "to verify intermediate or final results before concluding.\n\n"
+)
 
+agent_prompt = (
+    "**Note:** Use tools only when necessary for computation or verification. "
+    "Do not use stdin or any form of user input — assign values directly to variables instead. "
+    "Once you confirm the final answer, stop calling tools and output it in the required format."
+)
+#code_agent_prompt ="Note: You should first analyze the problem carefully and try to use tools to test your code, you can design some simple unit tests to initially verify the correctness of your code. After you make sure that your code is correct, do not call the tool again and directly submit your final code within ```python\n# YOUR CODE HERE\n```"
 class CustomRLHFDataset(RLHFDataset):
     """Custom dataset class to process Maxwell-Jia/AIME_2024, yentinglin/aime_2025 datasets."""
     def _read_files_and_tokenize(self):
@@ -147,7 +158,7 @@ class CustomRLHFDataset(RLHFDataset):
             problem, answer = row["Problem"], row["Answer"]
         elif data_source == "AIME2025":
             problem, answer = row["problem"], row["answer"]
-        prompt = math_prompt_1 + problem + math_prompt_2 + agent_prompt + answer_format
+        prompt = math_prompt_1 + math_prompt_2 + problem + agent_prompt + answer_format
         data = {
             "data_source": data_source,  # aime_2024, aime_2025
             "prompt": [{"role": "user", "content": prompt}],
@@ -160,7 +171,7 @@ class CustomRLHFDataset(RLHFDataset):
     def map_fn_gpqa(self, row: dict, *, data_source: str = None):
         problem,answer,domain =row['problem'],row['solution'],row['domain']
         prompt_1 = f"Analyze and solve the following {domain} problem step by step. \n\n"
-        prompt = prompt_1 + problem + math_prompt_2 + agent_prompt + answer_format + "\n Here you need to put the final uppercase letter option of this problem into \\boxed{}"
+        prompt = prompt_1 + math_prompt_2 + problem + agent_prompt + answer_format + "\n Here you need to put the final uppercase letter option of this problem into \\boxed{}"
         data = {
             "data_source":row['data_source'],
             "prompt": [{"role": "user", "content": prompt}],

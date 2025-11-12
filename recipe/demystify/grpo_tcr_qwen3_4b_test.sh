@@ -53,7 +53,7 @@ max_response_length=20480
 actor_lr=4e-6
 
 train_batch_size=16
-ppo_mini_batch_size=256
+ppo_mini_batch_size=64
 n_resp_per_prompt=16
 n_resp_per_prompt_val=2
 
@@ -61,7 +61,7 @@ n_resp_per_prompt_val=2
 infer_dp=1
 infer_tp=1 # vllm
 train_sp=1 # train
-offload=False
+offload=True
 
 actor_max_token_len_per_gpu=$(( (max_prompt_length + max_response_length) * 1 ))
 log_prob_max_token_len_per_gpu=$(( actor_max_token_len_per_gpu * 4 ))
@@ -121,7 +121,7 @@ fi
     actor_rollout_ref.rollout.multi_turn.max_assistant_turns=$max_turns \
     actor_rollout_ref.rollout.multi_turn.tool_config_path=$tool_config_path \
     actor_rollout_ref.rollout.multi_turn.format=hermes \
-    actor_rollout_ref.rollout.gpu_memory_utilization=0.75 \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.85 \
     actor_rollout_ref.rollout.n=$n_resp_per_prompt \
     actor_rollout_ref.rollout.val_kwargs.top_p=0.6 \
     actor_rollout_ref.rollout.val_kwargs.temperature=1.0 \
@@ -145,14 +145,15 @@ fi
     trainer.total_epochs=3 $@ \
     actor_rollout_ref.rollout.dtype=bfloat16 \
     actor_rollout_ref.actor.strategy=fsdp2 \
-    actor_rollout_ref.actor.fsdp_config.offload_policy=$offload \
     actor_rollout_ref.rollout.over_sample_rate=0.1 \
     actor_rollout_ref.model.use_fused_kernels=True \
     actor_rollout_ref.model.fused_kernel_options.impl_backend=triton \
     +actor_rollout_ref.rollout.engine_kwargs.sglang.prefill_attention_backend=fa3 \
     +actor_rollout_ref.rollout.engine_kwargs.sglang.decode_attention_backend=flashinfer \
     actor_rollout_ref.rollout.data_parallel_size=$infer_dp \
+    actor_rollout_ref.actor.fsdp_config.offload_policy=False \
+    actor_rollout_ref.actor.fsdp_config.param_offload=$offload \
+    actor_rollout_ref.actor.fsdp_config.optimizer_offload=$offload \
     # +actor_rollout_ref.rollout.engine_kwargs.sglang.kv_cache_dtype=fp8_e5m2 \
     # +actor_rollout_ref.actor.fsdp_config.model_dtype=bfloat16 \
-    # actor_rollout_ref.actor.fsdp_config.param_offload=$offload \
-    # actor_rollout_ref.actor.fsdp_config.optimizer_offload=$offload \
+    

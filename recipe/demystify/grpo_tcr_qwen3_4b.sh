@@ -2,7 +2,6 @@
 export WANDB_API_KEY="c2ade05262c251418946ecc479a941028eb37bba"
 set -x
 
-export VLLM_USE_V1=1
 export SANDBOX_STATS_LOG_EVERY=1000
 export VERL_TOOL_PARSER_ENABLE_REPAIR=1
 export VERL_TOOL_PARSER_ENABLE_FEEDBACK=0
@@ -58,17 +57,18 @@ overlong_penalty_factor=1.0
 
 max_turns=16
 max_prompt_length=2560
-max_response_length=10240
+max_response_length=20480
 actor_lr=1e-6
 
 train_batch_size=64
-ppo_mini_batch_size=32
+ppo_mini_batch_size=64
 n_resp_per_prompt=32
 n_resp_per_prompt_val=32
 
 # ================= perfomance =================
+infer_dp=1
 infer_tp=1 # vllm
-train_sp=4 # train
+train_sp=1 # train
 offload=True
 
 # For 40GB: reduce to ~11520 to keep batch size through gradient accumulation
@@ -126,7 +126,7 @@ fi
     actor_rollout_ref.actor.ppo_max_token_len_per_gpu=$actor_max_token_len_per_gpu \
     actor_rollout_ref.actor.ulysses_sequence_parallel_size=$train_sp \
     actor_rollout_ref.ref.log_prob_max_token_len_per_gpu=$log_prob_max_token_len_per_gpu \
-    actor_rollout_ref.rollout.name=vllm \
+    actor_rollout_ref.rollout.name=sglang \
     actor_rollout_ref.rollout.mode=async \
     actor_rollout_ref.rollout.tensor_model_parallel_size=$infer_tp \
     actor_rollout_ref.rollout.multi_turn.enable=True \
@@ -134,7 +134,7 @@ fi
     actor_rollout_ref.rollout.multi_turn.max_assistant_turns=$max_turns \
     actor_rollout_ref.rollout.multi_turn.tool_config_path=$tool_config_path \
     actor_rollout_ref.rollout.multi_turn.format=hermes \
-    actor_rollout_ref.rollout.gpu_memory_utilization=0.8 \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.85 \
     actor_rollout_ref.rollout.n=$n_resp_per_prompt \
     actor_rollout_ref.rollout.val_kwargs.top_p=0.6 \
     actor_rollout_ref.rollout.val_kwargs.temperature=1.0 \
@@ -142,7 +142,6 @@ fi
     actor_rollout_ref.rollout.max_num_batched_tokens=$((32768 * 2)) \
     actor_rollout_ref.rollout.max_num_seqs=256 \
     reward_model.reward_manager=${reward_manager} \
-    actor_rollout_ref.rollout.over_sample_rate=0.1 \
     +reward_model.reward_kwargs.overlong_buffer_cfg.enable=${enable_overlong_buffer} \
     +reward_model.reward_kwargs.overlong_buffer_cfg.len=${overlong_buffer_len} \
     +reward_model.reward_kwargs.overlong_buffer_cfg.penalty_factor=${overlong_penalty_factor} \
@@ -151,7 +150,7 @@ fi
     trainer.logger=['console','wandb'] \
     trainer.project_name=$project_name \
     trainer.experiment_name=$experiment_name \
-    trainer.n_gpus_per_node=4 \
+    trainer.n_gpus_per_node=8 \
     trainer.val_before_train=True \
     trainer.log_val_generations=20 \
     trainer.nnodes=1 \
@@ -161,5 +160,13 @@ fi
     trainer.total_epochs=3 $@ \
     actor_rollout_ref.rollout.dtype=bfloat16 \
     actor_rollout_ref.actor.strategy=fsdp2 \
-    actor_rollout_ref.actor.fsdp_config.offload_policy=$offload \
-    +actor_rollout_ref.rollout.engine_kwargs.vllm.kv_cache_dtype=fp8
+    actor_rollout_ref.rollout.over_sample_rate=0.1 \
+    actor_rollout_ref.model.use_fused_kernels=True \
+    actor_rollout_ref.model.fused_kernel_options.impl_backend=triton \
+    +actor_rollout_ref.rollout.engine_kwargs.sglang.prefill_attention_backend=fa3 \
+    +actor_rollout_ref.rollout.engine_kwargs.sglang.decode_attention_backend=flashinfer \
+    actor_rollout_ref.rollout.data_parallel_size=$infer_dp \
+    actor_rollout_ref.actor.fsdp_config.offload_policy=False \
+    actor_rollout_ref.actor.fsdp_config.param_offload=$offload \
+    actor_rollout_ref.actor.fsdp_config.optimizer_offload=$offload \
+    # +actor_rollout_ref.rollout.engine_kwargs.vllm.kv_cache_dtype=fp8

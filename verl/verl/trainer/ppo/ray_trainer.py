@@ -954,6 +954,88 @@ class RayPPOTrainer:
         )
         metrics.update(global_balance_stats)
 
+    def _filter_zero_advantage_samples(self, batch: DataProto):
+        """Filter out samples where all advantages are zero.
+        
+        This is useful for algorithms like GRPO where groups with identical rewards
+        result in zero advantages, which don't contribute to gradient updates.
+        
+        Args:
+            batch (DataProto): The batch containing advantages
+            
+        Returns:
+            tuple: (filtered_batch, metrics_dict)
+        """
+        advantages = batch.batch["advantages"]
+        response_mask = batch.batch["response_mask"]
+        
+        # Identify samples where all advantages are non-zero (considering response_mask)
+        # We check if the sum of absolute advantages (masked) is greater than a small epsilon
+        masked_advantages = torch.abs(advantages) * response_mask
+        advantage_sum_per_sample = masked_advantages.sum(dim=-1)  # shape: (batch_size,)
+        
+        # A sample is valid if it has non-zero advantage
+        # Use a small epsilon to handle floating point precision
+        epsilon = 1e-8
+        valid_sample_mask = advantage_sum_per_sample > epsilon
+        
+        n_original = valid_sample_mask.shape[0]
+        n_valid = valid_sample_mask.sum().item()
+        n_filtered = n_original - n_valid
+        
+        metrics = {
+            "filter/n_original_samples": n_original,
+            "filter/n_valid_samples": n_valid,
+            "filter/n_filtered_samples": n_filtered,
+            "filter/filtered_ratio": n_filtered / n_original if n_original > 0 else 0.0,
+        }
+        
+        # If all samples are filtered, keep at least one to avoid empty batch
+        if n_valid == 0:
+            print("Warning: All samples have zero advantage. Keeping the first sample to avoid empty batch.")
+            valid_sample_mask[0] = True
+            n_valid = 1
+            metrics["filter/n_valid_samples"] = n_valid
+            metrics["filter/forced_keep_one"] = 1
+        
+        # Check if we need to adjust batch size to be divisible by mini_batch_size
+        mini_batch_size = self.config.actor_rollout_ref.actor.get("ppo_mini_batch_size")
+        if mini_batch_size is not None and n_valid % mini_batch_size != 0:
+            # Calculate how many samples we need to drop to make it divisible
+            n_to_keep = (n_valid // mini_batch_size) * mini_batch_size
+            
+            if n_to_keep == 0:
+                # If we would drop everything, keep at least one mini_batch worth
+                print(
+                    f"Warning: After filtering, only {n_valid} samples remain, "
+                    f"which is less than mini_batch_size={mini_batch_size}. "
+                    f"Keeping all {n_valid} samples, but this may cause issues."
+                )
+            else:
+                # Find valid indices and only keep the first n_to_keep
+                valid_indices = torch.where(valid_sample_mask)[0]
+                # Set the last (n_valid - n_to_keep) valid samples back to invalid
+                for idx in valid_indices[n_to_keep:]:
+                    valid_sample_mask[idx] = False
+                
+                n_valid = n_to_keep
+                n_filtered = n_original - n_valid
+                
+                metrics["filter/n_valid_samples"] = n_valid
+                metrics["filter/n_filtered_samples"] = n_filtered
+                metrics["filter/filtered_ratio"] = n_filtered / n_original
+                metrics["filter/adjusted_for_mini_batch_size"] = 1
+                
+                print(
+                    f"Adjusted batch size from {n_original} to {n_valid} "
+                    f"(filtered {n_filtered} samples) to be divisible by mini_batch_size={mini_batch_size}"
+                )
+        
+        # Filter the batch using select_idxs
+        filtered_batch = batch.select_idxs(valid_sample_mask)
+        
+        return filtered_batch, metrics
+
     def fit(self):
         """
         The training loop of PPO.
@@ -1197,6 +1279,11 @@ class RayPPOTrainer:
                             norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
                             config=self.config.algorithm,
                         )
+
+                        # Filter out samples with all-zero advantages if enabled
+                        if self.config.trainer.get("filter_zero_advantage_samples", True):
+                            batch, filter_metrics = self._filter_zero_advantage_samples(batch)
+                            metrics.update(filter_metrics)
 
                     # update critic
                     if self.use_critic:

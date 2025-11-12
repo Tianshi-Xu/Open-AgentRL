@@ -265,7 +265,6 @@ def compute_score(completion, test_cases, task=None, timeout=30, is_long_penalty
                         in_outs={'inputs':["prefix"],"outputs":["prefix"]},
                         generation=cur_solution,
                         timeout=timeout,
-                        collect_stats=True,
                     )
                     metrics = list(metrics)
                     if len(metrics) == 3:

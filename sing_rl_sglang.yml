@@ -50,7 +50,6 @@ jobs:
     - cat sing_rl_fast.yml
     - source /opt/miniforge3/etc/profile.d/conda.sh
     - conda activate sandbox-runtime
-    - pip install Bio
     - cd ./SandboxFusion
     # - curl -sSL https://install.python-poetry.org | python -
     # - poetry install
@@ -60,7 +59,8 @@ jobs:
     - sleep 5
     - bash test.sh
     - cd ..
-    - conda activate verl-env
+    - conda deactivate
+    - conda deactivate
     - which python
     - cat recipe/demystify/grpo_tcr_qwen3_4b.sh
     - bash recipe/demystify/grpo_tcr_qwen3_4b.sh
