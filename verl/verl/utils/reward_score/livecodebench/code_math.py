@@ -28,7 +28,7 @@ from contextlib import contextmanager
 import signal
 import ast
 import numpy as np
-from verl.utils.reward_score.sandbox_fusion.utils import check_correctness
+from verl.utils.reward_score.code_judge_client import CodeJudgeClient
 from typing import Optional
 
 IMPORT_PROMPT='''from typing import *
@@ -46,7 +46,8 @@ import datetime
 inf = float('inf')
 
 '''
-sandbox_fusion_url = "http://localhost:8081/run_code"
+sandbox_fusion_url = "http://localhost:8088"
+code_judge_client = CodeJudgeClient(base_url=sandbox_fusion_url, max_workers=10)
 logger = logging.getLogger(__name__)
 livecodebench_dir = os.environ.get("LIVECODEBENCH_DATA_PATH", None)
 # if livecodebench_dir is None:
@@ -259,20 +260,21 @@ def compute_score(completion, test_cases, task=None, timeout=30, is_long_penalty
                 cur_solution += "\ncheck({})".format(test_cases_dict['entry_point'])
                 try:
                     # 执行代码的逻辑
-                    ## Add Sandbox Fusion API
-                    metrics = check_correctness(
-                        sandbox_fusion_url=sandbox_fusion_url,
-                        in_outs={'inputs':["prefix"],"outputs":["prefix"]},
-                        generation=cur_solution,
+                    ## Use CodeJudgeClient
+                    result = code_judge_client.run_single(
+                        code=cur_solution,
+                        stdin=None,
+                        language="python",
                         timeout=timeout,
                     )
-                    metrics = list(metrics)
-                    if metrics[1][0]['api_response']['run_result']['return_code'] == 0:
+                    if result.get('run_success', False) and result.get('success', False):
                          unit_test_result.append(True)
                          unit_test_metadata.append(f"成功")
                     else:
                          unit_test_result.append(False)
-                         unit_test_metadata.append(f"执行错误: {metrics[1][0]['stderr']}")
+                         stderr = result.get('stderr', '')
+                         reason = result.get('reason', 'unknown')
+                         unit_test_metadata.append(f"执行错误: {reason} - {stderr}")
                 except TimeoutError:
                     print("代码执行超时")
                     traceback.print_exc(10)
@@ -329,23 +331,27 @@ def compute_score(completion, test_cases, task=None, timeout=30, is_long_penalty
                 if isinstance(converted_solution, str):
                     solution = converted_solution
                 
-             ## Add Sandbox Fusion API
-            metrics = check_correctness(
-                sandbox_fusion_url = sandbox_fusion_url,
-                in_outs=json.loads(json.dumps(input_output)),
-                generation=solution,
+             ## Use CodeJudgeClient
+            # Build test cases from input_output
+            test_cases = []
+            inputs = input_output.get('inputs', [])
+            outputs = input_output.get('outputs', [])
+            for inp, out in zip(inputs, outputs):
+                test_cases.append({
+                    'stdin': str(inp) if inp is not None else None,
+                    'expected_output': str(out) if out is not None else None,
+                })
+            
+            result = code_judge_client.check_correctness(
+                code=solution,
+                test_cases=test_cases,
+                language="python",
                 timeout=timeout,
             )
-            metrics = list(metrics)
-            # print(metrics)
-            fixed = []
-            for e in metrics[0]:
-                if isinstance(e, np.ndarray):
-                    e = e.item(0)
-                if isinstance(e, np.bool_):
-                    e = bool(e)
-                fixed.append(e)
-            metrics[0] = fixed
+            
+            # Convert results to metrics format
+            metrics = [[r.get('success', False) for r in result['results']], result['results']]
+            fixed = metrics[0]
 
             if is_binary_reward:
                 payload = {

@@ -45,6 +45,7 @@ jobs:
       VERL_TOOL_PARSER_ENABLE_FEEDBACK: "0"
   command:
     - ls
+    - cat verl/verl/utils/reward_score/livecodebench/code_math.py
     - apt-get update && apt install sudo
     - cat /etc/issue
     - cat sing_rl_fast.yml
@@ -61,5 +62,6 @@ jobs:
     - conda deactivate
     - pip install json-repair
     - which python
+    - cd verl && pip3 install -e .[sglang] && cd ..
     - cat recipe/demystify/grpo_tcr_qwen3_4b.sh
     - bash recipe/demystify/grpo_tcr_qwen3_4b.sh

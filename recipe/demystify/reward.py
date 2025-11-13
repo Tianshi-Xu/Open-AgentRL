@@ -218,6 +218,7 @@ class CustomRLHFDataset(RLHFDataset):
 
 def compute_score(data_source, solution_str, ground_truth, extra_info, reward_router_address, reward_model_tokenizer):
     # use \\boxed{...} answer
+    # print("Computing score for data source:", data_source)
     ds = (data_source or "").lower()
     if 'code' in ds:
         result = code_math.compute_score(solution_str, ground_truth)
