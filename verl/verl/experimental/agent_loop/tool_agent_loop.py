@@ -14,8 +14,11 @@
 import asyncio
 import copy
 import json
+import json_repair
 import logging
 import os
+import time
+from collections import defaultdict
 from enum import Enum
 from typing import Any, Optional
 from uuid import uuid4
@@ -32,6 +35,29 @@ from verl.utils.rollout_trace import rollout_trace_op
 
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
+
+
+# Global tool call statistics
+_tool_stats = {"total": 0, "success": 0, "failed": 0}
+_tool_stats_lock = asyncio.Lock()
+_LOG_EVERY_N_CALLS = 20  # Log every 200 tool calls
+
+
+async def _record_tool_stat(success: bool):
+    """Record tool call statistics and log periodically."""
+    async with _tool_stats_lock:
+        _tool_stats["total"] += 1
+        _tool_stats["success" if success else "failed"] += 1
+        
+        total = _tool_stats["total"]
+        if total % _LOG_EVERY_N_CALLS == 0:
+            success_count = _tool_stats["success"]
+            failed_count = _tool_stats["failed"]
+            success_rate = success_count / total if total > 0 else 0.0
+            logger.error(
+                f"Tool Call Stats - Total: {total}, Success: {success_count}, "
+                f"Failed: {failed_count}, Success Rate: {success_rate:.2%}"
+            )
 
 
 class AgentState(Enum):
@@ -430,17 +456,21 @@ class ToolAgentLoop(AgentLoopBase):
     async def _call_tool(
         self, tool_call: FunctionCall, tools_kwargs: dict[str, Any]
     ) -> tuple[ToolResponse, float, dict]:
+        # print("call tool")
         """Call tool and return tool response."""
         tool, instance_id = None, None
+        success = False
         try:
             # TODO: append malformed tool_call to the prompt: invalid function name or arguments
             tool_name = tool_call.name
-            tool_args = json.loads(tool_call.arguments)
+            tool_args = json_repair.loads(tool_call.arguments)
             tool = self.tools[tool_name]
             kwargs = tools_kwargs.get(tool_name, {})
             instance_id, _ = await tool.create(create_kwargs=kwargs.get("create_kwargs", {}))
             tool_execution_response, tool_reward, res = await tool.execute(instance_id, tool_args)
+            success = True
         except Exception as e:
+            # print("tools_kwargs:", tools_kwargs)
             logger.warning(f"Error when executing tool: {e}")
             return (
                 ToolResponse(
@@ -450,6 +480,8 @@ class ToolAgentLoop(AgentLoopBase):
                 {},
             )
         finally:
+            # print("success:", success)
+            # await _record_tool_stat(success)
             if tool and instance_id:
                 await tool.release(instance_id)
 
@@ -465,7 +497,7 @@ class ToolAgentLoop(AgentLoopBase):
 
         # Create ToolResponse from tool execution result
         tool_response_kwargs = {"text": tool_response_text}
-
+        # print("tool_response_text:", tool_response_text)
         # Add multimedia data if present
         for attr_name in ["image", "video"]:
             if hasattr(tool_execution_response, attr_name):

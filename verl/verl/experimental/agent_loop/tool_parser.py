@@ -13,6 +13,7 @@
 # limitations under the License.
 import asyncio
 import json
+import json_repair
 import logging
 import os
 from abc import ABC, abstractmethod
@@ -94,10 +95,11 @@ class HermesToolParser(ToolParser):
         function_calls = []
         for match in matches:
             try:
-                function_call = json.loads(match)
+                function_call = json_repair.loads(match)
                 name, arguments = function_call["name"], function_call["arguments"]
                 function_calls.append(FunctionCall(name=name, arguments=json.dumps(arguments, ensure_ascii=False)))
             except Exception as e:
+                # print("function_call", function_call)
                 logger.error(f"Failed to decode tool call: {e}")
 
         # remaing text exclude tool call tokens

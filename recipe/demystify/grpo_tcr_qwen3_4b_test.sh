@@ -12,7 +12,7 @@ train_files="['$open_agent_rl']"
 test_files="['$aime_2025', '$aime_2024']"
 
 # tool
-tool_config_path=recipe/demystify/sandbox_fusion_tool_config.yaml
+tool_config_path=recipe/demystify/rstar_code_judge.yaml
 
 # wandb
 project_name=demystify-agentic-rl

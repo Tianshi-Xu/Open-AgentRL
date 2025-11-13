@@ -267,9 +267,6 @@ def compute_score(completion, test_cases, task=None, timeout=30, is_long_penalty
                         timeout=timeout,
                     )
                     metrics = list(metrics)
-                    if len(metrics) == 3:
-                        _, _, summary = metrics
-                        logger.info("Sandbox execution summary", extra={"summary": summary})
                     if metrics[1][0]['api_response']['run_result']['return_code'] == 0:
                          unit_test_result.append(True)
                          unit_test_metadata.append(f"成功")
@@ -340,10 +337,6 @@ def compute_score(completion, test_cases, task=None, timeout=30, is_long_penalty
                 timeout=timeout,
             )
             metrics = list(metrics)
-            summary = None
-            if len(metrics) == 3:
-                _, _, summary = metrics
-                logger.info("Sandbox execution summary", extra={"summary": summary})
             # print(metrics)
             fixed = []
             for e in metrics[0]:
@@ -373,8 +366,6 @@ def compute_score(completion, test_cases, task=None, timeout=30, is_long_penalty
                         "acc": sum(metrics[0]) == len(metrics[0]),
                         "pred": solution,
                     }
-            if summary:
-                payload["sandbox_stats"] = summary
             return payload
 
         except Exception as e:

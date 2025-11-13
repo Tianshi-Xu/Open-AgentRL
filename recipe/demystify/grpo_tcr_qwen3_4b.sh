@@ -20,7 +20,7 @@ train_files="['$open_agent_rl']"
 test_files="['$aime_2025', '$aime_2024']"
 
 # tool
-tool_config_path=recipe/demystify/sandbox_fusion_tool_config.yaml
+tool_config_path=recipe/demystify/rstar_code_judge.yaml
 
 # wandb
 project_name=demystify-agentic-rl
@@ -62,7 +62,7 @@ actor_lr=1e-6
 
 train_batch_size=64
 ppo_mini_batch_size=64
-n_resp_per_prompt=32
+n_resp_per_prompt=16
 n_resp_per_prompt_val=32
 
 # ================= perfomance =================
@@ -160,7 +160,7 @@ fi
     trainer.total_epochs=3 $@ \
     actor_rollout_ref.rollout.dtype=bfloat16 \
     actor_rollout_ref.actor.strategy=fsdp2 \
-    actor_rollout_ref.rollout.over_sample_rate=0.1 \
+    actor_rollout_ref.rollout.over_sample_rate=0.2 \
     actor_rollout_ref.model.use_fused_kernels=True \
     actor_rollout_ref.model.fused_kernel_options.impl_backend=triton \
     +actor_rollout_ref.rollout.engine_kwargs.sglang.prefill_attention_backend=fa3 \

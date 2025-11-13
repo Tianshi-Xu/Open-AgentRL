@@ -3,10 +3,10 @@ description: open-agentrl-qwen3-4b-rl
 target:
   service: sing
   workspace_name: srgxws
-  name: msrresrchvc
+  name: msrresrchbasicvc
 
 environment:
-  image: verl-sandbox:v2
+  image: verl:v1
   registry: srgxacr.azurecr.io
 
 data:
@@ -19,21 +19,18 @@ code:
     - .git
     - /checkpoints/
     - /checkpoint/
-    - wandb/
-    - verl.egg-info/
+    - /wandb/
     - __pycache__/
     - .venv/
-    - amlt/
+    - /amlt/
     - /outputs/
-    - figs/
+    - /figs/
     - /output/
-    - flash_attn-2.7.4.post1+cu12torch2.7cxx11abiFALSE-cp311-cp311-linux_x86_64.whl
-    - flash_attn-2.7.4.post1+cu12torch2.6cxx11abiFALSE-cp311-cp311-linux_x86_64.whl
     - /pretrained_model/
 
 jobs:
-- name: open-agentrl-qwen3-4b-rl-test
-  sku: 1x80G4
+- name: open-agentrl-qwen3-4b-rl-sglang
+  sku: 1x80G8
   identity: managed
   priority: high
   submit_args:
@@ -47,20 +44,22 @@ jobs:
       SANDBOX_STATS_LOG_SECONDS: "0"
       VERL_TOOL_PARSER_ENABLE_FEEDBACK: "0"
   command:
+    - ls
+    - apt-get update && apt install sudo
+    - cat /etc/issue
     - cat sing_rl_fast.yml
     - source /opt/miniforge3/etc/profile.d/conda.sh
     - conda activate sandbox-runtime
-    - cd ./SandboxFusion
-    # - curl -sSL https://install.python-poetry.org | python -
-    # - poetry install
-    - mkdir -p docs/build
-    - make test-case CASE=test_python_assert
-    - stdbuf -oL -eL make run-online 2>&1 | tee /tmp/sandboxfusion.log &
-    - sleep 5
-    - bash test.sh
-    - cd ..
+    - pip install -r code-judge/requirements.txt
+    - pip install -e code-judge
+    - sudo apt-get update -y && sudo apt-get install redis -y
+    - redis-server --daemonize yes --protected-mode no --bind 0.0.0.0
+    - redis-cli ping
+    - tmux new-session -d -s server 'cd ./code-judge && MAX_EXECUTION_TIME=4 REDIS_URI="redis://localhost:6379" RUN_WORKERS=0 uvicorn app.main:app --host 0.0.0.0 --port 8088 --workers 16 2>&1 | tee server.log'
+    - tmux new-session -d -s worker 'cd ./code-judge &&  MAX_EXECUTION_TIME=4  REDIS_URI="redis://localhost:6379" MAX_WORKERS=64  python run_workers.py 2>&1 | tee worker.log'
+    - conda deactivate && conda deactivate
     - conda deactivate
-    - conda deactivate
+    - pip install json-repair
     - which python
     - cat recipe/demystify/grpo_tcr_qwen3_4b.sh
     - bash recipe/demystify/grpo_tcr_qwen3_4b.sh

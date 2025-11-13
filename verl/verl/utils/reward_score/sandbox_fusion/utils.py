@@ -127,7 +127,9 @@ def call_sandbox_api(
                 data=payload,
                 timeout=request_timeout,  # Use the calculated timeout
             )
-
+            if response.status_code == 111:
+                print("received 111 status code")
+                print(f"sandbox_fusion_url: {sandbox_fusion_url}, data: {payload}")
             # Check for Gateway Timeout (504) specifically for retrying
             if response.status_code == 504:
                 last_error = (
@@ -165,7 +167,7 @@ def call_sandbox_api(
             break  # Exit retry loop on other unexpected errors
 
     # If loop finishes without returning success, return the last recorded error
-    logger.error(f"{log_prefix}Sandbox API call failed. Last error: {last_error}")  # <-- Use internal log_prefix
+    # logger.error(f"{log_prefix}Sandbox API call failed. Last error: {last_error}")  # <-- Use internal log_prefix
     # Return the error message without the prefix, as the caller doesn't need the internal ID
     # Ensure API call failure returns error message, leading to -1 in check_correctness
     return None, last_error.replace(log_prefix, "API Call Failed: ") if last_error else "API Call Failed after retries"
@@ -453,7 +455,7 @@ def check_correctness(
     timeout: int = DEFAULT_TIMEOUT,
     memory_limit_mb: int = 1024,
     language: str = "python",
-    concurrent_semaphore: Optional[threading.Semaphore] = None,
+    concurrent_semaphore: Optional[threading.Semaphore] = None, collect_stats = False,
 ) -> tuple[list[Any], list[dict[str, Any]]]:
     """
     Checks the correctness of code generation using the remote sandbox API,

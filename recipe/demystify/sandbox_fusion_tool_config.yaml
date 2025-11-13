@@ -2,9 +2,9 @@ tools:
   - class_name: "recipe.demystify.reward.CustomSandboxFusionTool"
     config:
       sandbox_fusion_url: "http://localhost:8081/run_code"
-      num_workers: 4
+      num_workers: 16
       enable_global_rate_limit: true
-      rate_limit: 8
+      rate_limit: 64
       default_timeout: 45
       default_language: "python"
       memory_limit_mb: 2048

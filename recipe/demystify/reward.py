@@ -123,7 +123,6 @@ math_prompt_2 = (
 
 agent_prompt = (
     "**Note:** Use tools only when necessary for computation or verification. "
-    "Do not use stdin or any form of user input — assign values directly to variables instead. "
     "Once you confirm the final answer, stop calling tools and output it in the required format."
 )
 #code_agent_prompt ="Note: You should first analyze the problem carefully and try to use tools to test your code, you can design some simple unit tests to initially verify the correctness of your code. After you make sure that your code is correct, do not call the tool again and directly submit your final code within ```python\n# YOUR CODE HERE\n```"
