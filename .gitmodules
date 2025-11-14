@@ -1,3 +1,6 @@
 [submodule "SandboxFusion"]
 	path = SandboxFusion
 	url = https://github.com/Tianshi-Xu/SandboxFusion
+[submodule "code-judge"]
+	path = code-judge
+	url = https://github.com/0xWJ/code-judge.git
