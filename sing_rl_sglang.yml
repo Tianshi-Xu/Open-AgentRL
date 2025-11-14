@@ -27,10 +27,12 @@ code:
     - /figs/
     - /output/
     - /pretrained_model/
+    - code-judge/server.log
+    - code-judge/worker.log
 
 jobs:
 - name: open-agentrl-qwen3-4b-rl-sglang
-  sku: 1x80G8
+  sku: 1x80G8-A100
   identity: managed
   priority: high
   submit_args:
@@ -51,7 +53,7 @@ jobs:
     - cat sing_rl_fast.yml
     - source /opt/miniforge3/etc/profile.d/conda.sh
     - conda activate sandbox-runtime
-    - pip install -r code-judge/requirements.txt
+    - c
     - pip install -e code-judge
     - sudo apt-get update -y && sudo apt-get install redis -y
     - redis-server --daemonize yes --protected-mode no --bind 0.0.0.0
