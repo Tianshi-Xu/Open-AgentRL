@@ -6,7 +6,7 @@ target:
   name: msrresrchbasicvc
 
 environment:
-  image: verl:v1
+  image: verl_origin:v1
   registry: srgxacr.azurecr.io
 
 data:
@@ -39,11 +39,8 @@ jobs:
     env:
       NCCL_DEBUG: "ERROR"
       _AZUREML_SINGULARITY_JOB_UAI: /subscriptions/e546c811-2312-46e2-9fd0-c949c65da4d9/resourcegroups/srgx/providers/Microsoft.ManagedIdentity/userAssignedIdentities/srgxuai
-      SANDBOX_LOG_LEVEL: "WARN"
       VERL_LOGGING_LEVEL: "INFO"
       VERL_TOOL_PARSER_ENABLE_REPAIR: "1"
-      SANDBOX_STATS_LOG_EVERY: "1000"
-      SANDBOX_STATS_LOG_SECONDS: "0"
       VERL_TOOL_PARSER_ENABLE_FEEDBACK: "0"
   command:
     - ls
