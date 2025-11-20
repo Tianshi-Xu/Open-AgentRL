@@ -880,6 +880,13 @@ def compute_policy_loss(
 
     pg_losses = torch.where(advantages < 0, clip_pg_losses2, clip_pg_losses1)
     pg_loss = agg_loss(loss_mat=pg_losses, loss_mask=response_mask, loss_agg_mode=loss_agg_mode)
+    
+    # DEBUG: Print final metrics
+    print(f"[DEBUG] Final PPO metrics:")
+    print(f"  ppo_kl: {ppo_kl.detach().item():.8f}")
+    print(f"  pg_clipfrac: {pg_clipfrac.detach().item():.8f}")
+    print(f"  pg_clipfrac_lower: {pg_clipfrac_lower.detach().item():.8f}")
+    print(f"  pg_loss: {pg_loss.mean().item():.6f}")
 
     return pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower
 
@@ -1139,6 +1146,14 @@ def compute_policy_loss_clip_cov(
 
     negative_approx_kl = log_prob - old_log_prob
     ratio = torch.exp(negative_approx_kl)
+    
+    # DEBUG: Print ratio and KL statistics
+    print(f"[DEBUG] PPO metrics (before masking):")
+    print(f"  negative_approx_kl mean: {negative_approx_kl.mean().item():.6f}")
+    print(f"  negative_approx_kl abs mean: {negative_approx_kl.abs().mean().item():.6f}")
+    print(f"  ratio mean: {ratio.mean().item():.6f}")
+    print(f"  ratio min: {ratio.min().item():.6f}")
+    print(f"  ratio max: {ratio.max().item():.6f}")
     ppo_kl = verl_F.masked_mean(-negative_approx_kl, response_mask)
 
     pg_losses1 = -advantages * ratio

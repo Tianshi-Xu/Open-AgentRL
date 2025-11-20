@@ -68,6 +68,71 @@ class AgentState(Enum):
     INTERACTING = "interacting"
 
 
+class RollbackManager:
+    """Manages rollback mechanism for tool call errors."""
+    
+    def __init__(self, enable: bool, max_retries: int, error_patterns: list[str]):
+        self.enable = enable
+        self.max_retries = max_retries
+        self.error_patterns = error_patterns
+        self.retry_counts: dict[str, int] = defaultdict(int)
+        
+    def should_rollback(self, error_text: str) -> tuple[bool, str]:
+        """Check if error should trigger rollback.
+        
+        Returns:
+            tuple[bool, str]: (should_rollback, error_type)
+        """
+        if not self.enable:
+            return False, ""
+        for pattern in self.error_patterns:
+            if pattern.lower() in error_text.lower():
+                # print(f"error pattern:{pattern}, error_text:{error_text}")
+                return True, pattern
+        return False, ""
+    
+    def can_retry(self, position_key: str) -> bool:
+        """Check if retry is allowed at this position."""
+        return self.retry_counts[position_key] < self.max_retries
+    
+    def increment_retry(self, position_key: str) -> int:
+        """Increment retry count and return new count."""
+        self.retry_counts[position_key] += 1
+        return self.retry_counts[position_key]
+    
+    def format_error_feedback(self, error_messages: list[str]) -> str:
+        """Format error feedback for LLM."""
+        feedback = "The previous tool call(s) failed with the following error(s):\n"
+        for i, error in enumerate(error_messages, 1):
+            feedback += f"{i}. {error}\n"
+        feedback += "\nPlease correct the error and generate a new tool call."
+        return feedback
+    
+    def create_checkpoint(self, agent_data: "AgentData") -> dict[str, Any]:
+        """Create a checkpoint of current agent state."""
+        return {
+            "prompt_ids": list(agent_data.prompt_ids),
+            "response_ids": agent_data.response_ids,
+            "response_mask": list(agent_data.response_mask),
+            "response_logprobs": list(agent_data.response_logprobs) if agent_data.response_logprobs else None,
+            "messages": copy.deepcopy(agent_data.messages),
+            "image_data": agent_data.image_data,
+            "assistant_turns": agent_data.assistant_turns,
+            "user_turns": agent_data.user_turns,
+        }
+    
+    def restore_checkpoint(self, agent_data: "AgentData", checkpoint: dict[str, Any]):
+        """Restore agent state from checkpoint."""
+        agent_data.prompt_ids = checkpoint["prompt_ids"]
+        agent_data.response_ids = checkpoint["response_ids"]
+        agent_data.response_mask = checkpoint["response_mask"]
+        agent_data.response_logprobs = checkpoint["response_logprobs"]
+        agent_data.messages = checkpoint["messages"]
+        agent_data.image_data = checkpoint["image_data"]
+        agent_data.assistant_turns = checkpoint["assistant_turns"]
+        agent_data.user_turns = checkpoint["user_turns"]
+
+
 class AgentData:
     """Encapsulates all state variables for the agent loop."""
 
@@ -101,6 +166,10 @@ class AgentData:
 
         # Temporary state for tool calls
         self.tool_calls: list[FunctionCall] = []
+        
+        # Safety mechanisms to prevent infinite loops
+        self.total_tool_attempts = 0  # Track total tool call attempts across all turns
+        self.disable_rollback_after_max_retry = False  # Flag to disable rollback after max retry exceeded
 
 
 @register("tool_agent")
@@ -127,6 +196,16 @@ class ToolAgentLoop(AgentLoopBase):
         cls.tool_parser = ToolParser.get_tool_parser(config.actor_rollout_ref.rollout.multi_turn.format, cls.tokenizer)
         cls.tool_parser_name = config.actor_rollout_ref.rollout.multi_turn.format
         print(f"Initialized tools: {cls.tools}")
+
+        # Initialize rollback manager
+        enable_rollback = config.actor_rollout_ref.rollout.multi_turn.get("enable_tool_rollback", False)
+        max_retries = config.actor_rollout_ref.rollout.multi_turn.get("max_tool_retries", 3)
+        error_patterns = config.actor_rollout_ref.rollout.multi_turn.get(
+            "rollback_on_errors",
+            ["ImportError", "ModuleNotFoundError", "SyntaxError", "IndentationError", "NameError"],
+        )
+        cls.rollback_manager = RollbackManager(enable_rollback, max_retries, error_patterns)
+        print(f"Tool rollback enabled: {enable_rollback}, max_retries: {max_retries}")
 
         cls.apply_chat_template_kwargs = config.data.get("apply_chat_template_kwargs", {})
         cls.prompt_length = config.actor_rollout_ref.rollout.prompt_length
@@ -181,7 +260,7 @@ class ToolAgentLoop(AgentLoopBase):
             elif state == AgentState.GENERATING:
                 state = await self._handle_generating_state(agent_data, sampling_params)
             elif state == AgentState.PROCESSING_TOOLS:
-                state = await self._handle_processing_tools_state(agent_data)
+                state = await self._handle_processing_tools_state(agent_data, sampling_params)
             elif state == AgentState.INTERACTING:
                 state = await self._handle_interacting_state(agent_data)
             else:
@@ -283,11 +362,20 @@ class ToolAgentLoop(AgentLoopBase):
         else:
             return AgentState.TERMINATED
 
-    async def _handle_processing_tools_state(self, agent_data: AgentData) -> AgentState:
-        """Handle the processing tools state: execute tool calls and prepare tool responses."""
-        add_messages: list[dict[str, Any]] = []
-        new_images_this_turn: list[Any] = []  # Local variable instead of agent_data attribute
-
+    async def _handle_processing_tools_state(self, agent_data: AgentData, sampling_params: dict[str, Any]) -> AgentState:
+        """Handle the processing tools state: execute tool calls and prepare tool responses with rollback support."""
+        # Safety check: disable rollback if too many attempts to prevent infinite loops
+        agent_data.total_tool_attempts += 1
+        MAX_TOOL_ATTEMPTS_BEFORE_DISABLE = 30
+        
+        if agent_data.total_tool_attempts > MAX_TOOL_ATTEMPTS_BEFORE_DISABLE and not agent_data.disable_rollback_after_max_retry:
+            logger.warning(
+                f"⚠️ Total tool attempts ({agent_data.total_tool_attempts}) exceeded {MAX_TOOL_ATTEMPTS_BEFORE_DISABLE}. "
+                f"Disabling rollback mechanism to prevent infinite loops."
+            )
+            agent_data.disable_rollback_after_max_retry = True
+        
+        # Execute tool calls
         tasks = []
         tool_call_names = []
         for tool_call in agent_data.tool_calls[: self.max_parallel_calls]:
@@ -297,8 +385,245 @@ class ToolAgentLoop(AgentLoopBase):
         with simple_timer("tool_calls", agent_data.metrics):
             responses = await asyncio.gather(*tasks)
 
+        # Check for rollback-triggering errors (only if rollback is enabled and not disabled by max retry)
+        if self.rollback_manager.enable and not agent_data.disable_rollback_after_max_retry:
+            error_messages, error_types = self._detect_errors(responses, f"turn_{agent_data.assistant_turns}")
+            
+            # Handle rollback if needed
+            if error_messages:
+                # Now create checkpoint (only when actually needed)
+                tool_position_key = f"turn_{agent_data.assistant_turns}"
+                
+                # Check if retry limit exceeded
+                if not self.rollback_manager.can_retry(tool_position_key):
+                    # logger.warning(
+                    #     f"⚠️ Tool retry limit reached at {tool_position_key}. "
+                    #     f"Notifying model about tool execution failure."
+                    # )
+                    # Give model a final notification instead of direct termination
+                    return await self._handle_max_retry_exceeded(
+                        agent_data, responses, error_messages, error_types, tool_call_names, sampling_params
+                    )
+                
+                checkpoint = self.rollback_manager.create_checkpoint(agent_data)
+                rollback_result = await self._handle_rollback(
+                    agent_data, checkpoint, tool_position_key, error_messages, error_types, sampling_params
+                )
+                if rollback_result is not None:
+                    return rollback_result
+            else:
+                # Log successful tool execution (no errors detected)
+                tool_position_key = f"turn_{agent_data.assistant_turns}"
+                retry_count = self.rollback_manager.retry_counts.get(tool_position_key, 0)
+                # if retry_count > 0:
+                #     logger.warning(
+                #         f"✅ Tool execution succeeded at {tool_position_key} after {retry_count} retry(ies). "
+                #         f"Total attempts: {agent_data.total_tool_attempts}"
+                #     )
+
+        # No rollback needed - process tool responses normally
+        return await self._process_tool_responses(agent_data, responses, tool_call_names)
+    
+    def _detect_errors(self, responses: list[tuple], tool_position_key: str) -> tuple[list[str], list[str]]:
+        """Detect rollback-triggering errors in tool responses.
+        
+        Returns:
+            tuple[list[str], list[str]]: (error_messages, error_types)
+        """
+        error_messages = []
+        error_types = []
+        current_retry = self.rollback_manager.retry_counts.get(tool_position_key, 0)
+        
+        for i, (tool_response, tool_reward, _) in enumerate(responses):
+            error_text = tool_response.text or ""
+            should_rollback, error_type = self.rollback_manager.should_rollback(error_text)
+            if should_rollback:
+                error_messages.append(error_text)
+                error_types.append(error_type)
+                # logger.warning(
+                #     f"[Retry {current_retry}/{self.rollback_manager.max_retries}] "
+                #     f"Tool call #{i} failed with error type: {error_type}"
+                # )
+        return error_messages, error_types
+    
+    async def _handle_rollback(
+        self, 
+        agent_data: AgentData, 
+        checkpoint: dict[str, Any],
+        tool_position_key: str,
+        error_messages: list[str],
+        error_types: list[str],
+        sampling_params: dict[str, Any]
+    ) -> Optional[AgentState]:
+        """Handle the rollback process. Returns AgentState if rollback is triggered, None otherwise."""
+        if not error_messages:
+            return None
+            
+        retry_count = self.rollback_manager.increment_retry(tool_position_key)
+        # logger.warning(
+        #     f"🔄 Rollback initiated at {tool_position_key} | "
+        #     f"Error types: {error_types} | "
+        #     f"Retry: {retry_count}/{self.rollback_manager.max_retries}"
+        # )
+
+        # Step 1: Append error feedback to context
+        error_feedback = self.rollback_manager.format_error_feedback(error_messages)
+        error_message = {"role": "user", "content": error_feedback}
+        agent_data.messages.append(error_message)
+
+        # Step 2: Encode error feedback
+        error_prompt_ids = await self._encode_error_feedback(agent_data, error_message)
+        agent_data.prompt_ids += error_prompt_ids
+        agent_data.response_mask += [0] * len(error_prompt_ids)
+        if agent_data.response_logprobs:
+            agent_data.response_logprobs += [0.0] * len(error_prompt_ids)
+
+        # Step 3: Let LLM regenerate tool calls
+        new_state = await self._handle_generating_state(agent_data, sampling_params, ignore_termination=True)
+
+        if new_state == AgentState.TERMINATED or not agent_data.tool_calls:
+            # logger.error(
+            #     f"❌ Rollback failed at {tool_position_key} after {retry_count} retries. "
+            #     f"Unable to generate valid tool calls."
+            # )
+            return AgentState.TERMINATED
+
+        # logger.info(f"✅ Successfully regenerated {len(agent_data.tool_calls)} tool call(s) at {tool_position_key}")
+
+        # Step 4: Restore checkpoint
+        self.rollback_manager.restore_checkpoint(agent_data, checkpoint)
+
+        # Step 5: Recursive retry
+        return await self._handle_processing_tools_state(agent_data, sampling_params)
+    
+    async def _handle_max_retry_exceeded(
+        self,
+        agent_data: AgentData,
+        responses: list[tuple],
+        error_messages: list[str],
+        error_types: list[str],
+        tool_call_names: list[str],
+        sampling_params: dict[str, Any]
+    ) -> AgentState:
+        """Handle max retry exceeded: notify model instead of direct termination.
+        
+        For math problems, the model can:
+        1. Acknowledge the computational limitation
+        2. Break down the problem into simpler steps
+        3. Use alternative approaches or approximations
+        """
+        # Extract the last tool call's error information (iterate in reverse to get the last one)
+        last_error_detail = None
+        
+        for i in range(len(responses) - 1, -1, -1):  # Iterate backwards
+            tool_response, tool_reward, _ = responses[i]
+            error_text = tool_response.text or ""
+            should_rollback, error_type = self.rollback_manager.should_rollback(error_text)
+            if should_rollback:
+                tool_name = tool_call_names[i] if i < len(tool_call_names) else "unknown"
+                # Found the last failed tool call, extract its complete error message
+                last_error_detail = f"Tool '{tool_name}' error: {error_text}"
+                break  # Stop after finding the last error
+        
+        # Create failure notification with the last error detail
+        if last_error_detail:
+            failure_message = (
+                f"Tool call failure happened after {self.rollback_manager.max_retries} attempts. The last error was:\n\n"
+                f"{last_error_detail}\n\n"
+                f"The current approach may have technical limitations. "
+                f"Consider: (1) breaking into smaller steps, or"
+                f"(2) using alternative methods."
+            )
+        else:
+            # Fallback if no error detail found
+            failure_message = (
+                f"Tool call failure happened after {self.rollback_manager.max_retries} attempts. "
+                f"The current approach may have technical limitations."
+            )
+        
+        # Disable rollback for subsequent tool calls to prevent infinite loops
+        agent_data.disable_rollback_after_max_retry = True
+        # logger.warning(
+        #     f"⚠️ Rollback disabled for remaining tool calls to prevent infinite retry loops. "
+        #     f"failure_message: {failure_message}"
+        # )
+        
+        # Add as tool response to maintain conversation flow
+        final_notification = {"role": "tool", "content": failure_message}
+        agent_data.messages.append(final_notification)
+        
+        # Encode notification
+        if self.processor is not None:
+            raw_notification = await self.loop.run_in_executor(
+                None,
+                lambda: self.processor.apply_chat_template(
+                    [final_notification],
+                    add_generation_prompt=True,
+                    tokenize=False,
+                    **self.apply_chat_template_kwargs,
+                ),
+            )
+            model_inputs = self.processor(text=[raw_notification], images=None, return_tensors="pt")
+            notification_ids = model_inputs.pop("input_ids").squeeze(0).tolist()
+        else:
+            notification_ids = await self.loop.run_in_executor(
+                None,
+                lambda: self.tokenizer.apply_chat_template(
+                    [final_notification], add_generation_prompt=True, tokenize=True, **self.apply_chat_template_kwargs
+                ),
+            )
+            notification_ids = notification_ids[len(self.system_prompt) :]
+        
+        # Update agent state
+        agent_data.prompt_ids += notification_ids
+        agent_data.response_mask += [0] * len(notification_ids)
+        if agent_data.response_logprobs:
+            agent_data.response_logprobs += [0.0] * len(notification_ids)
+        agent_data.user_turns += 1
+        
+        # Check length limit
+        if len(agent_data.response_mask) >= self.response_length:
+            logger.warning("Response length limit reached after max retry notification")
+            return AgentState.TERMINATED
+        
+        # Let model continue and decide how to handle the failure
+        # logger.info(f"Allowing model to continue after tool failure at turn {agent_data.assistant_turns}")
+        return AgentState.GENERATING
+    
+    async def _encode_error_feedback(self, agent_data: AgentData, error_message: dict[str, Any]) -> list[int]:
+        """Encode error feedback message to token ids."""
+        if self.processor is not None:
+            raw_error_prompt = await self.loop.run_in_executor(
+                None,
+                lambda: self.processor.apply_chat_template(
+                    [error_message],
+                    add_generation_prompt=True,
+                    tokenize=False,
+                    **self.apply_chat_template_kwargs,
+                ),
+            )
+            model_inputs = self.processor(text=[raw_error_prompt], images=None, return_tensors="pt")
+            return model_inputs.pop("input_ids").squeeze(0).tolist()
+        else:
+            error_prompt_ids = await self.loop.run_in_executor(
+                None,
+                lambda: self.tokenizer.apply_chat_template(
+                    [error_message], add_generation_prompt=True, tokenize=True, **self.apply_chat_template_kwargs
+                ),
+            )
+            return error_prompt_ids[len(self.system_prompt) :]
+    
+    async def _process_tool_responses(
+        self, 
+        agent_data: AgentData, 
+        responses: list[tuple],
+        tool_call_names: list[str]
+    ) -> AgentState:
+        """Process tool responses and update agent state."""
+        add_messages: list[dict[str, Any]] = []
+        new_images_this_turn: list[Any] = []
+
         # Process tool responses and update multi_modal_data
-        # Removed: agent_data.new_images_this_turn = []
         for tool_response, tool_reward, _ in responses:
             # Create message from tool response
             if tool_response.image or tool_response.video:
@@ -377,7 +702,7 @@ class ToolAgentLoop(AgentLoopBase):
                 response_ids = await self.loop.run_in_executor(
                     None, lambda: self.tokenizer.encode(tool_response_text, add_special_tokens=False)
                 )
-            else:
+            else: 
                 response_ids = await self.loop.run_in_executor(
                     None,
                     lambda: self.tokenizer.apply_chat_template(add_messages, add_generation_prompt=True, tokenize=True),
@@ -471,10 +796,20 @@ class ToolAgentLoop(AgentLoopBase):
             success = True
         except Exception as e:
             # print("tools_kwargs:", tools_kwargs)
+            
+            if "'str' object has no attribute 'get'" in str(e):
+                logger.warning(f"tool call format is wrong")
+                return (
+                    ToolResponse(
+                        text=f"Tool call failure: tool call format is wrong, please make sure to generate correct json-format tool call arguments.",
+                    ),
+                    0.0,
+                    {},
+                )
             logger.warning(f"Error when executing tool: {e}")
             return (
                 ToolResponse(
-                    text=f"Error when executing tool: {e}",
+                    text=f"Tool call failure. Error when executing tool: {e}",
                 ),
                 0.0,
                 {},

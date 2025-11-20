@@ -13,14 +13,15 @@
 # limitations under the License.
 
 from collections import defaultdict
-
+import logging
 import torch
-
+import os
 from verl import DataProto
 from verl.utils.reward_score import default_compute_score
 from verl.workers.reward_manager import register
 from verl.workers.reward_manager.abstract import AbstractRewardManager
-
+logger = logging.getLogger(__name__)
+logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "INFO"))
 
 @register("dapo")
 class DAPORewardManager(AbstractRewardManager):
@@ -52,7 +53,9 @@ class DAPORewardManager(AbstractRewardManager):
 
     def __call__(self, data: DataProto, return_dict: bool = False):
         """We will expand this function gradually based on the available datasets"""
-
+        # logger.info(f"[DEBUG DAPO] Called with data batch keys: {list(data.batch.keys())}")
+        # logger.info(f"[DEBUG DAPO] 'rm_scores' in data.batch.keys(): {'rm_scores' in data.batch.keys()}")
+    
         # If there is rm score, we directly return rm score. Otherwise, we compute via rm_score_fn
         if "rm_scores" in data.batch.keys():
             if return_dict:

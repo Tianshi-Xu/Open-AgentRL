@@ -56,6 +56,18 @@ class MultiTurnConfig(BaseConfig):
     tokenization_sanity_check_mode: str = "strict"
     format: str = "hermes"
     num_repeat_rollouts: Optional[int] = None
+    
+    # Rollback mechanism configuration
+    enable_tool_rollback: bool = False
+    max_tool_retries: int = 3
+    rollback_on_errors: list = field(default_factory=lambda: [
+        "ImportError",
+        "ModuleNotFoundError",
+        "SyntaxError",
+        "IndentationError",
+        "NameError",
+        "tool call format is wrong"
+    ])
 
 
 @dataclass

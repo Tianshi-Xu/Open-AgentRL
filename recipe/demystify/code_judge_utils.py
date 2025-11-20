@@ -140,7 +140,7 @@ async def run_tool_calls_on_server_async(
                 output_parts.append(f'stdout: {results[i]["stdout"]}')
             if results[i]["stderr"]:
                 output_parts.append(f'stderr: {results[i]["stderr"]}')
-            output_parts.append(f'execution time: {results[i]["cost"]:.2f}s')
+            # output_parts.append(f'execution time: {results[i]["cost"]:.2f}s')
             results[i] = '\n'.join(output_parts)
         else:
             output_parts = []
@@ -150,7 +150,7 @@ async def run_tool_calls_on_server_async(
                 output_parts.append(f'stdout: {results[i]["stdout"]}')
             if results[i]["stderr"]:
                 output_parts.append(f'stderr: {results[i]["stderr"]}')
-            output_parts.append(f'execution time: {results[i]["cost"]:.2f}s')
+            # output_parts.append(f'execution time: {results[i]["cost"]:.2f}s')
             results[i] = '\n'.join(output_parts)
 
     return results

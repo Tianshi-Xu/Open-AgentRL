@@ -55,7 +55,8 @@ class DAPORewardLoopManager(RewardLoopManagerBase):
         data_source = data_item.non_tensor_batch["data_source"]
         ground_truth = data_item.non_tensor_batch["reward_model"]["ground_truth"]
         extra_info = data_item.non_tensor_batch.get("extra_info", {})
-
+        num_turns = data_item.non_tensor_batch.get("__num_turns__", 0)
+        extra_info["num_turns"] = num_turns
         response_str = await self.loop.run_in_executor(
             None, lambda: self.tokenizer.decode(valid_response_ids, skip_special_tokens=True)
         )

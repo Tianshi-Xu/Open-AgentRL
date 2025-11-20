@@ -498,6 +498,7 @@ class AgentLoopWorkerBase:
             enable_async_reward = (
                 self.reward_router_address is not None and self.config.reward_model.enable_resource_pool
             ) or not self.config.reward_model.enable
+            # print("enable_async_reward:", enable_async_reward)
             if output.reward_score is None and enable_async_reward:
                 batch = TensorDict(
                     {
@@ -519,8 +520,11 @@ class AgentLoopWorkerBase:
                     batch=batch,
                     non_tensor_batch=non_tensor_batch,
                 )
+                # print("in here!!!!!!!!!!!!!!!")
+                # print("self.reward_manager_worker:", self.reward_manager_worker)
                 result = await self.reward_manager_worker.compute_score.remote(data)
                 output.reward_score = result["reward_score"]
+                # print("output.reward_score:", output.reward_score)
                 output.extra_fields["reward_extra_info"] = result["reward_extra_info"]
 
             return _InternalAgentLoopOutput(
@@ -582,7 +586,10 @@ class AgentLoopWorkerBase:
         reward_extra_infos = [input.extra_fields.get("reward_extra_info", {}) for input in inputs]
         reward_extra_keys = list(reward_extra_infos[0].keys())
         for key in reward_extra_keys:
-            non_tensor_batch[key] = np.array([info.get(key) for info in reward_extra_infos])
+            arr = np.array([info.get(key) for info in reward_extra_infos])
+            if arr.ndim == 0:
+                arr = arr[None]
+            non_tensor_batch[key] = arr
 
         # Add multi_modal_inputs to non_tensor_batch if any samples have them
         multi_modal_inputs_list = [input.multi_modal_inputs for input in inputs]

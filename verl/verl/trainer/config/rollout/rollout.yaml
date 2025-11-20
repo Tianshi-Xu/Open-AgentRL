@@ -168,6 +168,25 @@ multi_turn:
   # truncate side of tool response: left, middle, right
   tool_response_truncate_side: middle
 
+  # Enable tool call rollback mechanism for error handling
+  enable_tool_rollback: false
+
+  # Maximum number of retries per tool call position before abandoning rollout
+  max_tool_retries: 5
+
+  # List of error patterns that trigger rollback
+  rollback_on_errors:
+    - "ImportError"
+    - "ModuleNotFoundError"
+    - "SyntaxError"
+    - "IndentationError"
+    - "NameError"
+    - "worker_timeout"
+    - "TypeError"
+    - "IndexError"
+    - "IndentationError"
+    # - "tool call format is wrong"
+
   # null for no interaction
   interaction_config_path: null
 

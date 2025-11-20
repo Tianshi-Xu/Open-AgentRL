@@ -201,12 +201,43 @@ def union_numpy_dict(tensor_dict1: dict[str, np.ndarray], tensor_dict2: dict[str
 def list_of_dict_to_dict_of_list(list_of_dict: list[dict]):
     if len(list_of_dict) == 0:
         return {}
-    keys = list_of_dict[0].keys()
-    output = {key: [] for key in keys}
+    
+    # Collect all possible keys from all dictionaries
+    all_keys = set()
     for data in list_of_dict:
-        for key, item in data.items():
-            assert key in output
-            output[key].append(item)
+        all_keys.update(data.keys())
+    
+    # Check for key inconsistency and warn
+    first_keys = set(list_of_dict[0].keys())
+    if all_keys != first_keys:
+        missing_in_first = all_keys - first_keys
+        extra_in_later = set()
+        for i, data in enumerate(list_of_dict[1:], 1):
+            extra = set(data.keys()) - first_keys
+            if extra:
+                extra_in_later.update(extra)
+        if missing_in_first or extra_in_later:
+            import warnings
+            warnings.warn(
+                f"Key inconsistency detected in list_of_dict_to_dict_of_list: "
+                f"First dict has keys {sorted(first_keys)}, "
+                f"but later dicts have additional keys {sorted(missing_in_first)} "
+                f"(total unique keys: {sorted(all_keys)}). "
+                f"This may indicate heterogeneous data sources in async rollout mode."
+            )
+    
+    # Initialize output with all keys
+    output = {key: [] for key in all_keys}
+    
+    # Fill data, using None as placeholder for missing keys
+    for data in list_of_dict:
+        for key in all_keys:
+            if key in data:
+                output[key].append(data[key])
+            else:
+                # Use None as placeholder for missing keys
+                output[key].append(None)
+    
     return output
 
 
@@ -938,6 +969,8 @@ class DataProto:
 
         non_tensor_batch = list_of_dict_to_dict_of_list(list_of_dict=[d.non_tensor_batch for d in data])
         for key, val in non_tensor_batch.items():
+            # Handle 0-d array
+            val = [v[None] if isinstance(v, np.ndarray) and v.ndim == 0 else v for v in val]
             non_tensor_batch[key] = np.concatenate(val, axis=0)
 
         # Merge meta_info with special handling for metrics

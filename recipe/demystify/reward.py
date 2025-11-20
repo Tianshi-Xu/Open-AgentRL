@@ -110,21 +110,25 @@ class CustomSandboxFusionTool(SandboxFusionTool):
         result = await self.execution_pool.execute.remote(self.execute_code, instance_id, code, timeout, language)
         # sandbox has no score or metrics, use Nones
         return result, None, None
-answer_format =  "\nRemember once you make sure the current answer is your final answer, do not call the tools again and directly output the final answer in the following text format, the answer format must be: \\boxed{'The final answer goes here.'}."
-math_prompt_1 = (
-    "You are a reasoning assistant that solves math problems carefully and accurately.\n"
-    "Analyze and solve the following math problem step by step.\n"
-    "Be explicit about your reasoning before performing any calculation.\n\n"
-)
-math_prompt_2 = (
-    "You may use the provided tool to perform precise and efficient calculations or "
-    "to verify intermediate or final results before concluding.\n\n"
-)
+# answer_format =  "\nRemember once you make sure the current answer is your final answer, do not call the tools again and directly output the final answer in the following text format, the answer format must be: \\boxed{'The final answer goes here.'}."
+# math_prompt_1 = (
+#     "You are a reasoning assistant that solves math problems carefully and accurately.\n"
+#     "Analyze and solve the following math problem step by step.\n"
+#     "Be explicit about your reasoning before performing any calculation.\n\n"
+# )
+# math_prompt_2 = (
+#     "You may use the provided tool to perform precise and efficient calculations or "
+#     "to verify intermediate or final results before concluding.\n\n"
+# )
 
-agent_prompt = (
-    "**Note:** Use tools only when necessary for computation or verification. "
-    "Once you confirm the final answer, stop calling tools and output it in the required format."
-)
+# agent_prompt = (
+#     "**Note:** Use tools only when necessary for computation or verification. "
+#     "Once you confirm the final answer, stop calling tools and output it in the required format."
+# )
+answer_format =  "\nRemember once you make sure the current answer is your final answer, do not call the tools again and directly output the final answer in the following text format, the answer format must be: \\boxed{'The final answer goes here.'}."
+math_prompt_1 = "Analyze and solve the following math problem step by step. \n\n"
+math_prompt_2 = "\n\nThe tool could be used for more precise and efficient calculation and could help you to verify your result before you reach the final answer."
+agent_prompt= "\n\n**Note: You should first analyze the problem and form a high-level solution strategy, then utilize the tools to help you solve the problem.**"
 #code_agent_prompt ="Note: You should first analyze the problem carefully and try to use tools to test your code, you can design some simple unit tests to initially verify the correctness of your code. After you make sure that your code is correct, do not call the tool again and directly submit your final code within ```python\n# YOUR CODE HERE\n```"
 class CustomRLHFDataset(RLHFDataset):
     """Custom dataset class to process Maxwell-Jia/AIME_2024, yentinglin/aime_2025 datasets."""
@@ -157,7 +161,7 @@ class CustomRLHFDataset(RLHFDataset):
             problem, answer = row["Problem"], row["Answer"]
         elif data_source == "AIME2025":
             problem, answer = row["problem"], row["answer"]
-        prompt = math_prompt_1 + math_prompt_2 + problem + agent_prompt + answer_format
+        prompt = math_prompt_1 + problem + math_prompt_2 + agent_prompt + answer_format
         data = {
             "data_source": data_source,  # aime_2024, aime_2025
             "prompt": [{"role": "user", "content": prompt}],
@@ -170,7 +174,7 @@ class CustomRLHFDataset(RLHFDataset):
     def map_fn_gpqa(self, row: dict, *, data_source: str = None):
         problem,answer,domain =row['problem'],row['solution'],row['domain']
         prompt_1 = f"Analyze and solve the following {domain} problem step by step. \n\n"
-        prompt = prompt_1 + math_prompt_2 + problem + agent_prompt + answer_format + "\n Here you need to put the final uppercase letter option of this problem into \\boxed{}"
+        prompt = prompt_1 + problem + math_prompt_2 + agent_prompt + answer_format + "\n Here you need to put the final uppercase letter option of this problem into \\boxed{}"
         data = {
             "data_source":row['data_source'],
             "prompt": [{"role": "user", "content": prompt}],
@@ -208,8 +212,10 @@ class CustomRLHFDataset(RLHFDataset):
     def map_fn_skywork(self,row:dict):
         content = row["prompt"][0]["content"]
         if "code" in row['data_source']:
-            row["prompt"][0]["content"] = content + agent_prompt + "\nBefore sumbit your code, you can utilize tools to check the correctness of your code, once you make sure the current code is correct, do not call the tools again and submit your code within ```python\n# YOUR CODE HERE\n```."
+            row["prompt"][0]["content"] = content + agent_prompt + ""
+            # "\nBefore sumbit your code, you can utilize tools to check the correctness of your code, once you make sure the current code is correct, do not call the tools again and submit your code within ```python\n# YOUR CODE HERE\n```."
             row["agent_name"] = "tool_agent"
+            # print("code row:",row)
         else:
             row["prompt"][0]["content"] = math_prompt_1 + content + math_prompt_2 + agent_prompt + answer_format + "\nDo not put units of the final answer inside \\boxed{}. The content of \\boxed{} should be the final numerical value of the final answer only, without any units."
             row["agent_name"] = "tool_agent"
@@ -221,19 +227,29 @@ def compute_score(data_source, solution_str, ground_truth, extra_info, reward_ro
     # print("Computing score for data source:", data_source)
     ds = (data_source or "").lower()
     if 'code' in ds:
+        # print("code solution_str:", solution_str)
+        # print("code ground_truth:", ground_truth)
         result = code_math.compute_score(solution_str, ground_truth)
+        # print("code result:", result)
     else:
         result = math_dapo.compute_score(solution_str=solution_str,ground_truth=ground_truth,strict_box_verify=True)
-    tool_calls = extra_info.get("tool_parser_detected_tool_calls", None)
-    if tool_calls is None:
-        num_turns = int(extra_info.get("num_turns",0))
-        tool_calls = max(0, (num_turns - 2) // 2)
+    
+    # Count tool call failures by searching for "Tool call failure" in the response
+    tool_failure_count = solution_str.count("Tool call failure")
+    
+    num_turns = int(extra_info.get("num_turns",0))
+    # if result["score"] > 0:
+    #     print("have correct answer, score:", result["score"])
+    # print("num_turns:", num_turns)
     if result["score"] < 0:
-        tool_call_reward = max(0, int(tool_calls)) * 0.1
-        result["score"] = float(min(-0.6, result["score"] + tool_call_reward))
+        tool_call_reward = (num_turns - 2) / 2 * 0.1
+        # Apply penalty for tool call failures
+        tool_failure_penalty = tool_failure_count * -0.1
+        result["score"] = float(min(-0.6, result["score"] + tool_call_reward + tool_failure_penalty))
     if result["pred"] is None:
         result["pred"] = ""
-    return result
+    # Convert numpy types to Python native types for JSON serialization
+    return _to_py(result)
 
 def compute_score_outcome_reward(data_source, solution_str, ground_truth, extra_info, reward_router_address, reward_model_tokenizer):
     # use \\boxed{...} answer
@@ -242,13 +258,18 @@ def compute_score_outcome_reward(data_source, solution_str, ground_truth, extra_
         result = code_math.compute_score(solution_str, ground_truth)
     else:
         result = math_dapo.compute_score(solution_str=solution_str,ground_truth=ground_truth,strict_box_verify=True)
-    tool_calls = extra_info.get("tool_parser_detected_tool_calls")
-    if tool_calls is None:
-        num_turns = int(extra_info.get("num_turns",0))
-        tool_calls = max(0, (num_turns - 2) // 2)
-    if result["score"] < 0:
-        tool_call_reward = 0
-        result["score"] = float(min(-0.6, result["score"] + tool_call_reward))
+    # if result["score"] < 0:
+    #     result["score"] = 0
+    tool_failure_count = solution_str.count("Tool call failure")
+    tool_failure_penalty = max(tool_failure_count * -0.1, -0.1)
+    has_success_tool_call = solution_str.count("Tool call success")
+    if result["score"] == 1 and has_success_tool_call > 0:
+        result["score"] += 0.1
+    result["score"] += tool_failure_penalty
     if result["pred"] is None:
         result["pred"] = ""
-    return result
+    # if tool_failure_count >0:
+    #     print("tool_failure_penalty:",tool_failure_penalty)
+    # print("score:", result["score"])
+    # Convert numpy types to Python native types for JSON serialization
+    return _to_py(result)

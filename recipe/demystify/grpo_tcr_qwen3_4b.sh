@@ -58,10 +58,10 @@ overlong_penalty_factor=1.0
 max_turns=16
 max_prompt_length=2560
 max_response_length=20480
-actor_lr=1e-6
+actor_lr=4e-6
 
-train_batch_size=64
-ppo_mini_batch_size=64
+train_batch_size=128
+ppo_mini_batch_size=128
 n_resp_per_prompt=16
 n_resp_per_prompt_val=32
 
@@ -70,9 +70,10 @@ infer_dp=1
 infer_tp=1 # vllm
 train_sp=1 # train
 offload=True
+num_GPU=8
 
 # For 40GB: reduce to ~11520 to keep batch size through gradient accumulation
-actor_max_token_len_per_gpu=$(( (max_prompt_length + max_response_length) ))
+actor_max_token_len_per_gpu=$(( (max_prompt_length + max_response_length) * 1 ))
 
 # log_prob_max_token_len_per_gpu: Controls ref policy forward pass efficiency only
 # Can be set as large as memory allows (ref policy only needs forward, no gradients)
@@ -109,7 +110,7 @@ fi
     data.custom_cls.path=recipe/demystify/reward.py \
     data.custom_cls.name=CustomRLHFDataset \
     custom_reward_function.path=recipe/demystify/reward.py \
-    custom_reward_function.name=compute_score \
+    custom_reward_function.name=compute_score_outcome_reward \
     actor_rollout_ref.model.path=$model_path \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
@@ -150,9 +151,10 @@ fi
     trainer.logger=['console','wandb'] \
     trainer.project_name=$project_name \
     trainer.experiment_name=$experiment_name \
-    trainer.n_gpus_per_node=8 \
-    trainer.val_before_train=True \
+    trainer.n_gpus_per_node=$num_GPU \
+    trainer.val_before_train=False \
     trainer.log_val_generations=20 \
+    trainer.validation_data_dir=$VAL_SAVE_PATH \
     trainer.nnodes=1 \
     trainer.save_freq=30 \
     trainer.default_local_dir=$default_local_dir \
@@ -160,7 +162,6 @@ fi
     trainer.total_epochs=3 $@ \
     actor_rollout_ref.rollout.dtype=bfloat16 \
     actor_rollout_ref.actor.strategy=fsdp2 \
-    actor_rollout_ref.rollout.over_sample_rate=0.2 \
     actor_rollout_ref.model.use_fused_kernels=True \
     actor_rollout_ref.model.fused_kernel_options.impl_backend=triton \
     +actor_rollout_ref.rollout.engine_kwargs.sglang.prefill_attention_backend=fa3 \
@@ -169,4 +170,10 @@ fi
     actor_rollout_ref.actor.fsdp_config.offload_policy=False \
     actor_rollout_ref.actor.fsdp_config.param_offload=$offload \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=$offload \
+    actor_rollout_ref.rollout.multi_turn.enable_tool_rollback=True \
+    actor_rollout_ref.rollout.multi_turn.max_tool_retries=3 \
+    +trainer.filter_zero_advantage_samples=False \
+    actor_rollout_ref.rollout.over_sample_rate=0.1 \
+    # actor_rollout_ref.actor.optim.lr_warmup_steps=10 \
+    # actor_rollout_ref.rollout.over_sample_rate=0.2 \
     # +actor_rollout_ref.rollout.engine_kwargs.vllm.kv_cache_dtype=fp8

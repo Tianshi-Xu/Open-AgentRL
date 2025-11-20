@@ -29,10 +29,11 @@ code:
     - /pretrained_model/
     - code-judge/server.log
     - code-judge/worker.log
+    - /SandboxFusion/
 
 jobs:
-- name: open-agentrl-qwen3-4b-rl-sglang
-  sku: 1x80G8-A100
+- name: sglang-v3-context-edit
+  sku: 1x80G8
   identity: managed
   priority: high
   submit_args:
@@ -44,12 +45,15 @@ jobs:
       VERL_TOOL_PARSER_ENABLE_FEEDBACK: "0"
   command:
     - ls
-    - apt-get update && apt install sudo -y && apt install tmux -y
+    - export DEBIAN_FRONTEND=noninteractive
+    - export PATH="/home/aiscuser/.local/bin:$$PATH"
+    - sudo apt-get update -y
+    - sudo apt install tmux -y
     - sudo apt-get install -y libglib2.0-0
     - cat sing_rl_sglang.yml
     - pip install -r code-judge/requirements.txt
     - pip install -e code-judge
-    - sudo apt-get update -y && sudo apt-get install redis -y
+    - sudo apt-get install redis -y
     - redis-server --daemonize yes --protected-mode no --bind 0.0.0.0
     - redis-cli ping
     - tmux new-session -d -s server 'cd ./code-judge &&  MAX_EXECUTION_TIME=4 REDIS_URI="redis://localhost:6379" RUN_WORKERS=0 uvicorn app.main:app --host 0.0.0.0 --port 8088 --workers 16 2>&1 | tee server.log'
