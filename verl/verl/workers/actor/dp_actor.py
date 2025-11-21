@@ -390,16 +390,16 @@ class DataParallelPPOActor(BasePPOActor):
         on_policy = len(mini_batches) == 1 and self.config.ppo_epochs == 1
         
         # DEBUG: Print mini-batch split info
-        print(f"\n{'='*60}")
-        print(f"[DEBUG] Mini-batch Split Info:")
-        print(f"  Total samples in data: {len(data)}")
-        print(f"  ppo_mini_batch_size: {self.config.ppo_mini_batch_size}")
-        print(f"  Number of mini_batches: {len(mini_batches)}")
-        print(f"  ppo_epochs: {self.config.ppo_epochs}")
-        print(f"  on_policy mode: {on_policy}")
-        if len(mini_batches) > 0:
-            print(f"  First mini_batch size: {len(mini_batches[0])}")
-        print(f"{'='*60}\n")
+        # print(f"\n{'='*60}")
+        # print(f"[DEBUG] Mini-batch Split Info:")
+        # print(f"  Total samples in data: {len(data)}")
+        # print(f"  ppo_mini_batch_size: {self.config.ppo_mini_batch_size}")
+        # print(f"  Number of mini_batches: {len(mini_batches)}")
+        # print(f"  ppo_epochs: {self.config.ppo_epochs}")
+        # print(f"  on_policy mode: {on_policy}")
+        # if len(mini_batches) > 0:
+        #     print(f"  First mini_batch size: {len(mini_batches[0])}")
+        # print(f"{'='*60}\n")
 
         metrics = {}
         for _ in range(self.config.ppo_epochs):
@@ -442,29 +442,29 @@ class DataParallelPPOActor(BasePPOActor):
                     # for fully_async_policy recipe
                     if hasattr(self.config, "use_rollout_log_probs") and self.config.use_rollout_log_probs:
                         old_log_prob = model_inputs["old_log_probs"]
-                        print(f"[DEBUG] Using rollout_log_probs mode")
+                        # print(f"[DEBUG] Using rollout_log_probs mode")
                     else:
                         if on_policy:
                             old_log_prob = log_prob.detach()
-                            print(f"[DEBUG] Using ON-POLICY mode: old_log_prob = log_prob.detach()")
-                            print(f"  This means old_log_prob will ALWAYS equal log_prob!")
+                            # print(f"[DEBUG] Using ON-POLICY mode: old_log_prob = log_prob.detach()")
+                            # print(f"  This means old_log_prob will ALWAYS equal log_prob!")
                         else:
                             old_log_prob = model_inputs["old_log_probs"]
-                            print(f"[DEBUG] Using OFF-POLICY mode: old_log_prob from model_inputs")
+                            # print(f"[DEBUG] Using OFF-POLICY mode: old_log_prob from model_inputs")
                     
                     # DEBUG: Print log_prob statistics
-                    print(f"[DEBUG] Log Prob Statistics (batch_idx={batch_idx}):")
-                    print(f"  log_prob shape: {log_prob.shape}")
-                    print(f"  log_prob mean: {log_prob.mean().item():.6f}")
-                    print(f"  log_prob std: {log_prob.std().item():.6f}")
-                    print(f"  old_log_prob mean: {old_log_prob.mean().item():.6f}")
-                    print(f"  old_log_prob std: {old_log_prob.std().item():.6f}")
+                    # print(f"[DEBUG] Log Prob Statistics (batch_idx={batch_idx}):")
+                    # print(f"  log_prob shape: {log_prob.shape}")
+                    # print(f"  log_prob mean: {log_prob.mean().item():.6f}")
+                    # print(f"  log_prob std: {log_prob.std().item():.6f}")
+                    # print(f"  old_log_prob mean: {old_log_prob.mean().item():.6f}")
+                    # print(f"  old_log_prob std: {old_log_prob.std().item():.6f}")
                     diff = log_prob - old_log_prob
-                    print(f"  difference (log_prob - old_log_prob):")
-                    print(f"    mean: {diff.mean().item():.8f}")
-                    print(f"    abs mean: {diff.abs().mean().item():.8f}")
-                    print(f"    max: {diff.max().item():.8f}")
-                    print(f"    min: {diff.min().item():.8f}")
+                    # print(f"  difference (log_prob - old_log_prob):")
+                    # print(f"    mean: {diff.mean().item():.8f}")
+                    # print(f"    abs mean: {diff.abs().mean().item():.8f}")
+                    # print(f"    max: {diff.max().item():.8f}")
+                    # print(f"    min: {diff.min().item():.8f}")
 
                     loss_mode = self.config.policy_loss.get("loss_mode", "vanilla")
                     # vanilla -> verl.trainer.ppo.core_algos.compute_policy_loss_vanilla

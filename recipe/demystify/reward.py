@@ -258,14 +258,14 @@ def compute_score_outcome_reward(data_source, solution_str, ground_truth, extra_
         result = code_math.compute_score(solution_str, ground_truth)
     else:
         result = math_dapo.compute_score(solution_str=solution_str,ground_truth=ground_truth,strict_box_verify=True)
-    # if result["score"] < 0:
-    #     result["score"] = 0
-    tool_failure_count = solution_str.count("Tool call failure")
-    tool_failure_penalty = max(tool_failure_count * -0.1, -0.1)
-    has_success_tool_call = solution_str.count("Tool call success")
-    if result["score"] == 1 and has_success_tool_call > 0:
-        result["score"] += 0.1
-    result["score"] += tool_failure_penalty
+    if result["score"] < 0:
+        result["score"] = 0
+    # tool_failure_count = solution_str.count("Tool call failure")
+    # tool_failure_penalty = max(tool_failure_count * -0.1, -0.1)
+    # has_success_tool_call = solution_str.count("Tool call success")
+    # if result["score"] == 1 and has_success_tool_call > 0:
+    #     result["score"] += 0.1
+    # result["score"] += tool_failure_penalty
     if result["pred"] is None:
         result["pred"] = ""
     # if tool_failure_count >0:

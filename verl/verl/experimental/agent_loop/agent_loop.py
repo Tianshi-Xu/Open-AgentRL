@@ -606,6 +606,208 @@ class AgentLoopWorkerBase:
             extra_fields[key] = temp_arr
 
         non_tensor_batch.update(extra_fields)
+        
+        ### DEBUG ###
+        # Expand negative samples into batch and add their scores to rm_scores
+        negative_samples_list = extra_fields.get("negative_samples")
+        if negative_samples_list is not None:
+            import logging
+            logger = logging.getLogger(__name__)
+            
+            # Collect all negative samples that need to be added
+            neg_samples_to_add = []
+            parent_indices = []  # Track which parent each negative sample comes from
+            
+            for idx, neg_samples in enumerate(negative_samples_list):
+                if neg_samples:  # Check if not empty
+                    for neg_sample in neg_samples:
+                        neg_samples_to_add.append(neg_sample)
+                        parent_indices.append(idx)
+            
+            if neg_samples_to_add:
+                logger.warning(
+                    f"\n{'='*70}\n"
+                    f"🔄 [EXPANDING NEGATIVE SAMPLES INTO BATCH]\n"
+                    f"  Total negative samples to add: {len(neg_samples_to_add)}\n"
+                    f"  Original batch size: {len(inputs)}\n"
+                    f"  New batch size: {len(inputs) + len(neg_samples_to_add)}\n"
+                    f"{'='*70}"
+                )
+                
+                # Prepare tensors for negative samples
+                neg_prompt_ids = []
+                neg_response_ids = []
+                neg_response_mask = []
+                neg_attention_mask = []
+                neg_input_ids = []
+                neg_position_ids = []
+                neg_response_logprobs = [] if inputs[0].response_logprobs is not None else None
+                neg_scores = []
+                neg_num_turns = []
+                neg_reward_extra_infos = []
+                
+                for neg_sample in neg_samples_to_add:
+                    # Convert lists to tensors with proper shapes
+                    neg_prompt = torch.tensor(neg_sample["prompt_ids"], dtype=torch.long).unsqueeze(0)
+                    neg_response = torch.tensor(neg_sample["response_ids"], dtype=torch.long).unsqueeze(0)
+                    neg_resp_mask = torch.tensor(neg_sample["response_mask"], dtype=torch.long).unsqueeze(0)
+                    
+                    # Concatenate prompt and response for input_ids
+                    neg_input = torch.cat([neg_prompt, neg_response], dim=1)
+                    
+                    # Create attention mask (all 1s for prompt and valid response tokens)
+                    neg_attn_mask = torch.cat([
+                        torch.ones_like(neg_prompt),
+                        neg_resp_mask
+                    ], dim=1)
+                    
+                    # Create position ids (sequential)
+                    neg_pos_ids = torch.arange(neg_input.size(1), dtype=torch.long).unsqueeze(0)
+                    
+                    neg_prompt_ids.append(neg_prompt)
+                    neg_response_ids.append(neg_response)
+                    neg_response_mask.append(neg_resp_mask)
+                    neg_attention_mask.append(neg_attn_mask)
+                    neg_input_ids.append(neg_input)
+                    neg_position_ids.append(neg_pos_ids)
+                    
+                    if neg_response_logprobs is not None:
+                        neg_logprobs = torch.tensor(
+                            neg_sample["response_logprobs"], dtype=torch.float32
+                        ).unsqueeze(0)
+                        neg_response_logprobs.append(neg_logprobs)
+                    
+                    # Use score from negative sample (should be -1)
+                    neg_scores.append(neg_sample.get("score", -1))
+                    
+                    # Use default num_turns (can be inherited from parent if needed)
+                    neg_num_turns.append(1)
+                    
+                    # Empty reward_extra_info for negative samples
+                    neg_reward_extra_infos.append({})
+                
+                # Pad negative samples to match batch dimensions
+                max_prompt_len = prompt_ids.size(1)
+                max_response_len = response_ids.size(1)
+                
+                padded_neg_prompt_ids = []
+                padded_neg_response_ids = []
+                padded_neg_response_mask = []
+                padded_neg_attention_mask = []
+                padded_neg_input_ids = []
+                padded_neg_position_ids = []
+                padded_neg_response_logprobs = [] if neg_response_logprobs is not None else None
+                
+                for i in range(len(neg_samples_to_add)):
+                    # Pad prompt
+                    prompt_pad_len = max_prompt_len - neg_prompt_ids[i].size(1)
+                    if prompt_pad_len > 0:
+                        neg_prompt_ids[i] = torch.cat([
+                            neg_prompt_ids[i],
+                            torch.zeros(1, prompt_pad_len, dtype=torch.long)
+                        ], dim=1)
+                    
+                    # Pad response
+                    response_pad_len = max_response_len - neg_response_ids[i].size(1)
+                    if response_pad_len > 0:
+                        neg_response_ids[i] = torch.cat([
+                            neg_response_ids[i],
+                            torch.zeros(1, response_pad_len, dtype=torch.long)
+                        ], dim=1)
+                        neg_response_mask[i] = torch.cat([
+                            neg_response_mask[i],
+                            torch.zeros(1, response_pad_len, dtype=torch.long)
+                        ], dim=1)
+                        
+                        if padded_neg_response_logprobs is not None:
+                            neg_response_logprobs[i] = torch.cat([
+                                neg_response_logprobs[i],
+                                torch.zeros(1, response_pad_len, dtype=torch.float32)
+                            ], dim=1)
+                    
+                    # Pad input_ids and attention_mask
+                    total_len = max_prompt_len + max_response_len
+                    input_pad_len = total_len - neg_input_ids[i].size(1)
+                    if input_pad_len > 0:
+                        neg_input_ids[i] = torch.cat([
+                            neg_input_ids[i],
+                            torch.zeros(1, input_pad_len, dtype=torch.long)
+                        ], dim=1)
+                        neg_attention_mask[i] = torch.cat([
+                            neg_attention_mask[i],
+                            torch.zeros(1, input_pad_len, dtype=torch.long)
+                        ], dim=1)
+                        neg_position_ids[i] = torch.cat([
+                            neg_position_ids[i],
+                            torch.zeros(1, input_pad_len, dtype=torch.long)
+                        ], dim=1)
+                    
+                    padded_neg_prompt_ids.append(neg_prompt_ids[i])
+                    padded_neg_response_ids.append(neg_response_ids[i])
+                    padded_neg_response_mask.append(neg_response_mask[i])
+                    padded_neg_attention_mask.append(neg_attention_mask[i])
+                    padded_neg_input_ids.append(neg_input_ids[i])
+                    padded_neg_position_ids.append(neg_position_ids[i])
+                    if padded_neg_response_logprobs is not None:
+                        padded_neg_response_logprobs.append(neg_response_logprobs[i])
+                
+                # Concatenate with original batch
+                batch["prompts"] = torch.cat([batch["prompts"], torch.cat(padded_neg_prompt_ids, dim=0)], dim=0)
+                batch["responses"] = torch.cat([batch["responses"], torch.cat(padded_neg_response_ids, dim=0)], dim=0)
+                batch["response_mask"] = torch.cat([batch["response_mask"], torch.cat(padded_neg_response_mask, dim=0)], dim=0)
+                batch["attention_mask"] = torch.cat([batch["attention_mask"], torch.cat(padded_neg_attention_mask, dim=0)], dim=0)
+                batch["input_ids"] = torch.cat([batch["input_ids"], torch.cat(padded_neg_input_ids, dim=0)], dim=0)
+                batch["position_ids"] = torch.cat([batch["position_ids"], torch.cat(padded_neg_position_ids, dim=0)], dim=0)
+                
+                if padded_neg_response_logprobs is not None:
+                    batch["rollout_log_probs"] = torch.cat([
+                        batch["rollout_log_probs"], 
+                        torch.cat(padded_neg_response_logprobs, dim=0)
+                    ], dim=0)
+                
+                # Add negative sample scores to rm_scores
+                if "rm_scores" in batch:
+                    # Create rm_scores for negative samples
+                    neg_rm_scores = torch.zeros(len(neg_samples_to_add), max_response_len, dtype=torch.float32)
+                    for i, (neg_sample, score) in enumerate(zip(neg_samples_to_add, neg_scores)):
+                        # Find the last valid token position
+                        response_len = sum(neg_sample["response_mask"])
+                        if response_len > 0:
+                            neg_rm_scores[i, response_len - 1] = score
+                    
+                    # Concatenate with original rm_scores
+                    batch["rm_scores"] = torch.cat([batch["rm_scores"], neg_rm_scores], dim=0)
+                
+                # Update non_tensor_batch
+                non_tensor_batch["__num_turns__"] = np.concatenate([
+                    non_tensor_batch["__num_turns__"],
+                    np.array(neg_num_turns, dtype=np.int32)
+                ])
+                
+                # Extend reward_extra_info fields
+                for key in reward_extra_keys:
+                    original_arr = non_tensor_batch[key]
+                    neg_arr = np.array([info.get(key) for info in neg_reward_extra_infos])
+                    if neg_arr.ndim == 0:
+                        neg_arr = neg_arr[None]
+                    non_tensor_batch[key] = np.concatenate([original_arr, neg_arr])
+                
+                # Add parent indices for UID inheritance in trainer
+                # This tells the trainer which parent sample each negative sample should inherit UID from
+                non_tensor_batch["__negative_sample_parent_indices__"] = np.array(
+                    [-1] * len(inputs) + parent_indices,  # -1 for original samples, parent_idx for neg samples
+                    dtype=np.int32
+                )
+                
+                # Update batch size
+                batch._batch_size = len(inputs) + len(neg_samples_to_add)
+                
+                logger.warning(
+                    f"✅ Successfully expanded {len(neg_samples_to_add)} negative samples into batch\n"
+                    f"   All negative samples have score=-1 in rm_scores\n"
+                    f"   Parent indices tracked for UID inheritance: {parent_indices}"
+                )
+        ### DEBUG ###
         return DataProto(
             batch=batch,
             non_tensor_batch=non_tensor_batch,
@@ -775,6 +977,30 @@ class AgentLoopManager:
         # calculate performance metrics
         metrics = [output.meta_info.pop("metrics") for output in outputs]  # List[List[Dict[str, str]]]
         timing = self._performance_metrics(metrics, output)
+
+        ### DEBUG ###
+        # Count total negative samples from rollback across all outputs
+        total_negative_samples = 0
+        for single_output in outputs:
+            if "negative_samples" in single_output.non_tensor_batch:
+                # negative_samples is a list per sample in the batch
+                neg_samples_list = single_output.non_tensor_batch["negative_samples"]
+                for neg_samples in neg_samples_list:
+                    if neg_samples:  # Check if not empty
+                        total_negative_samples += len(neg_samples)
+        
+        if total_negative_samples > 0:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(
+                f"\n{'='*70}\n"
+                f"🎯 [ROLLOUT STEP COMPLETE - NEGATIVE SAMPLES SUMMARY]\n"
+                f"  Total negative samples collected from rollback: {total_negative_samples}\n"
+                f"  Batch size: {len(output)}\n"
+                f"  Average negative samples per episode: {total_negative_samples / len(output):.2f}\n"
+                f"{'='*70}"
+            )
+        ### DEBUG ###
 
         output.meta_info = {"timing": timing, **outputs[0].meta_info}
         return output

@@ -38,9 +38,16 @@ logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 
 
 # Global tool call statistics
-_tool_stats = {"total": 0, "success": 0, "failed": 0}
+_tool_stats = {
+    "total": 0,
+    "success": 0,
+    "failed": 0,
+    "rollback_triggered": 0,
+    "rollback_recovered": 0,
+    "rollback_failed": 0
+}
 _tool_stats_lock = asyncio.Lock()
-_LOG_EVERY_N_CALLS = 20  # Log every 200 tool calls
+_LOG_EVERY_N_CALLS = 20  # Log every 20 tool calls
 
 
 async def _record_tool_stat(success: bool):
@@ -54,10 +61,47 @@ async def _record_tool_stat(success: bool):
             success_count = _tool_stats["success"]
             failed_count = _tool_stats["failed"]
             success_rate = success_count / total if total > 0 else 0.0
-            logger.error(
-                f"Tool Call Stats - Total: {total}, Success: {success_count}, "
-                f"Failed: {failed_count}, Success Rate: {success_rate:.2%}"
-            )
+            
+            rollback_triggered = _tool_stats["rollback_triggered"]
+            rollback_recovered = _tool_stats["rollback_recovered"]
+            rollback_failed = _tool_stats["rollback_failed"]
+            rollback_pending = rollback_triggered - rollback_recovered - rollback_failed
+            
+            # Always show rollback stats to make it clear whether rollback is working
+            ### DEBUG ###
+            if rollback_triggered > 0:
+                rollback_recovery_rate = rollback_recovered / rollback_triggered
+                logger.warning(
+                    f"📊 Tool Stats - Total: {total}, Success: {success_count} ({success_rate:.2%}), "
+                    f"Failed: {failed_count} | Rollback: {rollback_triggered} triggered, "
+                    f"{rollback_recovered} recovered ({rollback_recovery_rate:.2%}), {rollback_failed} failed, "
+                    f"{rollback_pending} pending"
+                )
+            else:
+                # Show that rollback stats are all 0 (either disabled or no rollback errors detected)
+                logger.warning(
+                    f"📊 Tool Stats - Total: {total}, Success: {success_count} ({success_rate:.2%}), "
+                    f"Failed: {failed_count} | Rollback: 0 triggered (no rollback errors or disabled)"
+                )
+            ### DEBUG ###
+
+
+async def _record_rollback_trigger():
+    """Record that a rollback was triggered (first failure of a turn)."""
+    async with _tool_stats_lock:
+        _tool_stats["rollback_triggered"] += 1
+
+
+async def _record_rollback_recovery():
+    """Record that a rollback successfully recovered (turn succeeded after retries)."""
+    async with _tool_stats_lock:
+        _tool_stats["rollback_recovered"] += 1
+
+
+async def _record_rollback_final_failure():
+    """Record that a rollback ultimately failed (max retry exceeded)."""
+    async with _tool_stats_lock:
+        _tool_stats["rollback_failed"] += 1
 
 
 class AgentState(Enum):
@@ -71,11 +115,13 @@ class AgentState(Enum):
 class RollbackManager:
     """Manages rollback mechanism for tool call errors."""
     
-    def __init__(self, enable: bool, max_retries: int, error_patterns: list[str]):
+    def __init__(self, enable: bool, max_retries: int, error_patterns: list[str], 
+                 save_negative_samples: bool = False, max_negative_samples_per_group: int = 1):
         self.enable = enable
         self.max_retries = max_retries
         self.error_patterns = error_patterns
-        self.retry_counts: dict[str, int] = defaultdict(int)
+        self.save_negative_samples = save_negative_samples
+        self.max_negative_samples_per_group = max_negative_samples_per_group
         
     def should_rollback(self, error_text: str) -> tuple[bool, str]:
         """Check if error should trigger rollback.
@@ -91,14 +137,14 @@ class RollbackManager:
                 return True, pattern
         return False, ""
     
-    def can_retry(self, position_key: str) -> bool:
+    def can_retry(self, retry_counts: dict[str, int], position_key: str) -> bool:
         """Check if retry is allowed at this position."""
-        return self.retry_counts[position_key] < self.max_retries
+        return retry_counts[position_key] < self.max_retries
     
-    def increment_retry(self, position_key: str) -> int:
+    def increment_retry(self, retry_counts: dict[str, int], position_key: str) -> int:
         """Increment retry count and return new count."""
-        self.retry_counts[position_key] += 1
-        return self.retry_counts[position_key]
+        retry_counts[position_key] += 1
+        return retry_counts[position_key]
     
     def format_error_feedback(self, error_messages: list[str]) -> str:
         """Format error feedback for LLM."""
@@ -170,6 +216,12 @@ class AgentData:
         # Safety mechanisms to prevent infinite loops
         self.total_tool_attempts = 0  # Track total tool call attempts across all turns
         self.disable_rollback_after_max_retry = False  # Flag to disable rollback after max retry exceeded
+        self.rollback_recovered_turns: set[str] = set()  # Track turns that have successfully recovered
+        self.retry_counts: dict[str, int] = defaultdict(int)  # Track retry counts for each turn
+        
+        # Negative samples for failed tool calls
+        self.negative_samples: list[dict[str, Any]] = []  # Store failed trajectories as negative samples
+        self.negative_samples_count = 0  # Track number of negative samples collected
 
 
 @register("tool_agent")
@@ -204,8 +256,20 @@ class ToolAgentLoop(AgentLoopBase):
             "rollback_on_errors",
             ["ImportError", "ModuleNotFoundError", "SyntaxError", "IndentationError", "NameError"],
         )
-        cls.rollback_manager = RollbackManager(enable_rollback, max_retries, error_patterns)
-        print(f"Tool rollback enabled: {enable_rollback}, max_retries: {max_retries}")
+        save_negative_samples = config.actor_rollout_ref.rollout.multi_turn.get("save_negative_samples", False)
+        max_negative_samples_per_group = config.actor_rollout_ref.rollout.multi_turn.get("max_negative_samples_per_group", 1)
+        cls.rollback_manager = RollbackManager(enable_rollback, max_retries, error_patterns, 
+                                                save_negative_samples, max_negative_samples_per_group)
+        ### DEBUG ###
+        print(f"\n{'='*70}")
+        print(f"Tool Rollback Configuration:")
+        print(f"  - Rollback enabled: {enable_rollback}")
+        print(f"  - Max retries per position: {max_retries}")
+        print(f"  - Error patterns: {error_patterns}")
+        print(f"  - Save negative samples: {save_negative_samples}")
+        print(f"  - Max negative samples per group: {max_negative_samples_per_group}")
+        print(f"{'='*70}\n")
+        ### DEBUG ###
 
         cls.apply_chat_template_kwargs = config.data.get("apply_chat_template_kwargs", {})
         cls.prompt_length = config.actor_rollout_ref.rollout.prompt_length
@@ -284,6 +348,40 @@ class ToolAgentLoop(AgentLoopBase):
             extra_fields={},
         )
         output.extra_fields.update({"turn_scores": agent_data.turn_scores, "tool_rewards": agent_data.tool_rewards})
+        
+        # Add negative samples to output if any were collected
+        if agent_data.negative_samples:
+            output.extra_fields["negative_samples"] = agent_data.negative_samples
+            
+            ### DEBUG ###
+            # Log detailed statistics
+            error_type_counts = {}
+            for neg_sample in agent_data.negative_samples:
+                for error_type in neg_sample.get("error_types", []):
+                    error_type_counts[error_type] = error_type_counts.get(error_type, 0) + 1
+            
+            # Verify all negative samples have score=-1
+            all_scores = [ns.get('score', 'N/A') for ns in agent_data.negative_samples]
+            scores_correct = all(score == -1 for score in all_scores)
+            
+            logger.warning(
+                f"\n{'='*70}\n"
+                f"📊 [NEGATIVE SAMPLES SUMMARY]\n"
+                f"  Request ID: {agent_data.request_id}\n"
+                f"  Total negative samples from rollback: {len(agent_data.negative_samples)}\n"
+                f"  Error types distribution: {error_type_counts}\n"
+                f"  Total tool attempts: {agent_data.total_tool_attempts}\n"
+                f"  Assistant turns: {agent_data.assistant_turns}\n"
+                f"  User turns: {agent_data.user_turns}\n"
+                f"  All scores=-1: {scores_correct} (scores: {all_scores})\n"
+                f"{'='*70}"
+            )
+            ### DEBUG ###
+        elif self.rollback_manager.save_negative_samples:
+            ### DEBUG ###
+            logger.info(f"No negative samples collected for request {agent_data.request_id}")
+            ### DEBUG ###
+        
         return output
 
     async def _handle_pending_state(self, agent_data: AgentData, sampling_params: dict[str, Any]) -> AgentState:
@@ -362,7 +460,9 @@ class ToolAgentLoop(AgentLoopBase):
         else:
             return AgentState.TERMINATED
 
-    async def _handle_processing_tools_state(self, agent_data: AgentData, sampling_params: dict[str, Any]) -> AgentState:
+    async def _handle_processing_tools_state(
+        self, agent_data: AgentData, sampling_params: dict[str, Any], tool_position_key: Optional[str] = None
+    ) -> AgentState:
         """Handle the processing tools state: execute tool calls and prepare tool responses with rollback support."""
         # Safety check: disable rollback if too many attempts to prevent infinite loops
         agent_data.total_tool_attempts += 1
@@ -385,17 +485,54 @@ class ToolAgentLoop(AgentLoopBase):
         with simple_timer("tool_calls", agent_data.metrics):
             responses = await asyncio.gather(*tasks)
 
-        # Check for rollback-triggering errors (only if rollback is enabled and not disabled by max retry)
-        if self.rollback_manager.enable and not agent_data.disable_rollback_after_max_retry:
-            error_messages, error_types = self._detect_errors(responses, f"turn_{agent_data.assistant_turns}")
+        # Determine the key to use for tracking retries
+        # If passed from rollback (recursive call), use it to maintain continuity across turns.
+        # Otherwise, use current turn index.
+        if tool_position_key is None:
+            tool_position_key = f"turn_{agent_data.assistant_turns}"
+
+        # Check for rollback-triggering errors
+        # We check if rollback is enabled AND (not disabled globally OR we are currently in a retry loop that needs resolution)
+        is_retrying = agent_data.retry_counts.get(tool_position_key, 0) > 0
+        if self.rollback_manager.enable and (not agent_data.disable_rollback_after_max_retry or is_retrying):
+            error_messages, error_types = self._detect_errors(responses, tool_position_key)
             
             # Handle rollback if needed
             if error_messages:
-                # Now create checkpoint (only when actually needed)
-                tool_position_key = f"turn_{agent_data.assistant_turns}"
+                # Save negative sample BEFORE creating checkpoint (if this is first failure)
+                # This ensures we capture the original failed state
+                if (agent_data.retry_counts.get(tool_position_key, 0) == 0 and
+                    self.rollback_manager.save_negative_samples and 
+                    agent_data.negative_samples_count < self.rollback_manager.max_negative_samples_per_group):
+                    negative_sample = self._create_negative_sample(agent_data, error_messages, error_types, tool_position_key)
+                    agent_data.negative_samples.append(negative_sample)
+                    agent_data.negative_samples_count += 1
+                    ### DEBUG ###
+                    logger.warning(
+                        f"💾 [NEGATIVE SAMPLE] Saved {agent_data.negative_samples_count}/{self.rollback_manager.max_negative_samples_per_group} | "
+                        f"Position: {tool_position_key} | Errors: {error_types} | "
+                        f"Response length: {len(negative_sample['response_ids'])} tokens"
+                    )
+                    # Print detailed negative sample content to verify error messages are included
+                    logger.warning(
+                        f"📋 [NEGATIVE SAMPLE DETAIL]\n"
+                        f"negative_sample:{negative_sample}"
+                    )
+                    ### DEBUG ###
                 
-                # Check if retry limit exceeded
-                if not self.rollback_manager.can_retry(tool_position_key):
+                # Now create checkpoint (only when actually needed)
+                # tool_position_key is already set correctly above
+                
+                # Record rollback trigger only on first failure (retry_count == 0)
+                if agent_data.retry_counts.get(tool_position_key, 0) == 0:
+                    await _record_rollback_trigger()
+                
+                # Check if retry limit exceeded OR rollback is disabled globally (force failure for existing retry)
+                if not self.rollback_manager.can_retry(agent_data.retry_counts, tool_position_key) or agent_data.disable_rollback_after_max_retry:
+                    # Record rollback final failure when max retry is reached
+                    # Only record if not already recorded as recovered
+                    if tool_position_key not in agent_data.rollback_recovered_turns:
+                        await _record_rollback_final_failure()
                     # logger.warning(
                     #     f"⚠️ Tool retry limit reached at {tool_position_key}. "
                     #     f"Notifying model about tool execution failure."
@@ -413,13 +550,20 @@ class ToolAgentLoop(AgentLoopBase):
                     return rollback_result
             else:
                 # Log successful tool execution (no errors detected)
-                tool_position_key = f"turn_{agent_data.assistant_turns}"
-                retry_count = self.rollback_manager.retry_counts.get(tool_position_key, 0)
-                # if retry_count > 0:
-                #     logger.warning(
-                #         f"✅ Tool execution succeeded at {tool_position_key} after {retry_count} retry(ies). "
-                #         f"Total attempts: {agent_data.total_tool_attempts}"
-                #     )
+                # Use the same key logic
+                retry_count = agent_data.retry_counts.get(tool_position_key, 0)
+                
+                # Record rollback recovery if this turn had previous failures and hasn't been recorded yet
+                if retry_count > 0 and tool_position_key not in agent_data.rollback_recovered_turns:
+                    agent_data.rollback_recovered_turns.add(tool_position_key)
+                    await _record_rollback_recovery()
+                    ### DEBUG ###
+                    logger.warning(
+                        f"✅ [ROLLBACK SUCCESS] Position: {tool_position_key} | "
+                        f"Recovered after {retry_count} retry(ies) | "
+                        f"Total attempts: {agent_data.total_tool_attempts}"
+                    )
+                    ### DEBUG ###
 
         # No rollback needed - process tool responses normally
         return await self._process_tool_responses(agent_data, responses, tool_call_names)
@@ -432,7 +576,6 @@ class ToolAgentLoop(AgentLoopBase):
         """
         error_messages = []
         error_types = []
-        current_retry = self.rollback_manager.retry_counts.get(tool_position_key, 0)
         
         for i, (tool_response, tool_reward, _) in enumerate(responses):
             error_text = tool_response.text or ""
@@ -459,12 +602,14 @@ class ToolAgentLoop(AgentLoopBase):
         if not error_messages:
             return None
             
-        retry_count = self.rollback_manager.increment_retry(tool_position_key)
-        # logger.warning(
-        #     f"🔄 Rollback initiated at {tool_position_key} | "
-        #     f"Error types: {error_types} | "
-        #     f"Retry: {retry_count}/{self.rollback_manager.max_retries}"
-        # )
+        retry_count = self.rollback_manager.increment_retry(agent_data.retry_counts, tool_position_key)
+        ### DEBUG ###
+        logger.warning(
+            f"🔄 Rollback initiated at {tool_position_key} | "
+            f"Error types: {error_types} | "
+            f"Retry: {retry_count}/{self.rollback_manager.max_retries}"
+        )
+        ### DEBUG ###
 
         # Step 1: Append error feedback to context
         error_feedback = self.rollback_manager.format_error_feedback(error_messages)
@@ -482,19 +627,30 @@ class ToolAgentLoop(AgentLoopBase):
         new_state = await self._handle_generating_state(agent_data, sampling_params, ignore_termination=True)
 
         if new_state == AgentState.TERMINATED or not agent_data.tool_calls:
+            # Unable to generate valid tool calls - restore checkpoint and continue processing
+            # to let the normal flow handle this (will trigger retry or max retry logic)
             # logger.error(
-            #     f"❌ Rollback failed at {tool_position_key} after {retry_count} retries. "
-            #     f"Unable to generate valid tool calls."
+            #     f"❌ Failed to regenerate tool calls at {tool_position_key} after {retry_count} retries. "
+            #     f"Will attempt next retry or handle max retry."
             # )
+            
+            # Record failure as we are aborting the rollback attempt
+            if tool_position_key not in agent_data.rollback_recovered_turns:
+                await _record_rollback_final_failure()
+
+            self.rollback_manager.restore_checkpoint(agent_data, checkpoint)
+            # Return TERMINATED to stop this retry attempt - the recursive call will handle next attempt
             return AgentState.TERMINATED
 
-        # logger.info(f"✅ Successfully regenerated {len(agent_data.tool_calls)} tool call(s) at {tool_position_key}")
+        ### DEBUG ###
+        logger.info(f"✅ Successfully regenerated {len(agent_data.tool_calls)} tool call(s) at {tool_position_key}")
+        ### DEBUG ###
 
         # Step 4: Restore checkpoint
         self.rollback_manager.restore_checkpoint(agent_data, checkpoint)
 
         # Step 5: Recursive retry
-        return await self._handle_processing_tools_state(agent_data, sampling_params)
+        return await self._handle_processing_tools_state(agent_data, sampling_params, tool_position_key=tool_position_key)
     
     async def _handle_max_retry_exceeded(
         self,
@@ -778,13 +934,41 @@ class ToolAgentLoop(AgentLoopBase):
         else:
             return AgentState.GENERATING
 
+    def _create_negative_sample(self, agent_data: AgentData, error_messages: list[str], 
+                                error_types: list[str], tool_position_key: str) -> dict[str, Any]:
+        """Create a negative sample from current failed trajectory.
+        
+        Returns a dictionary containing the failed trajectory information that can be used
+        for training as a negative sample.
+        """
+        return {
+            "prompt_ids": list(agent_data.prompt_ids),
+            "response_ids": agent_data.response_ids.copy() if agent_data.response_ids else [],
+            "response_mask": list(agent_data.response_mask),
+            "response_logprobs": list(agent_data.response_logprobs) if agent_data.response_logprobs else None,
+            "error_messages": error_messages,
+            "error_types": error_types,
+            "tool_position": tool_position_key,
+            "assistant_turns": agent_data.assistant_turns,
+            "user_turns": agent_data.user_turns,
+            "tool_calls": [{
+                "name": tc.name,
+                "arguments": tc.arguments,
+                "id": getattr(tc, "id", None)
+            } for tc in agent_data.tool_calls],
+            "score": -1,  # Negative samples always get score=-1
+        }
+    
     async def _call_tool(
         self, tool_call: FunctionCall, tools_kwargs: dict[str, Any]
     ) -> tuple[ToolResponse, float, dict]:
-        # print("call tool")
         """Call tool and return tool response."""
         tool, instance_id = None, None
-        success = False
+        tool_execution_response = None
+        tool_reward = None
+        res = None
+        stat_recorded = False  # Flag to prevent duplicate recording
+        
         try:
             # TODO: append malformed tool_call to the prompt: invalid function name or arguments
             tool_name = tool_call.name
@@ -793,12 +977,11 @@ class ToolAgentLoop(AgentLoopBase):
             kwargs = tools_kwargs.get(tool_name, {})
             instance_id, _ = await tool.create(create_kwargs=kwargs.get("create_kwargs", {}))
             tool_execution_response, tool_reward, res = await tool.execute(instance_id, tool_args)
-            success = True
         except Exception as e:
-            # print("tools_kwargs:", tools_kwargs)
-            
             if "'str' object has no attribute 'get'" in str(e):
                 logger.warning(f"tool call format is wrong")
+                await _record_tool_stat(False)
+                stat_recorded = True
                 return (
                     ToolResponse(
                         text=f"Tool call failure: tool call format is wrong, please make sure to generate correct json-format tool call arguments.",
@@ -807,6 +990,8 @@ class ToolAgentLoop(AgentLoopBase):
                     {},
                 )
             logger.warning(f"Error when executing tool: {e}")
+            await _record_tool_stat(False)
+            stat_recorded = True
             return (
                 ToolResponse(
                     text=f"Tool call failure. Error when executing tool: {e}",
@@ -815,8 +1000,12 @@ class ToolAgentLoop(AgentLoopBase):
                 {},
             )
         finally:
-            # print("success:", success)
-            # await _record_tool_stat(success)
+            # Record tool call statistics based on response content (only if not already recorded)
+            if not stat_recorded and tool_execution_response is not None:
+                response_text = tool_execution_response.text or ""
+                is_success = "Tool call success" in response_text
+                await _record_tool_stat(is_success)
+            
             if tool and instance_id:
                 await tool.release(instance_id)
 
@@ -832,7 +1021,6 @@ class ToolAgentLoop(AgentLoopBase):
 
         # Create ToolResponse from tool execution result
         tool_response_kwargs = {"text": tool_response_text}
-        # print("tool_response_text:", tool_response_text)
         # Add multimedia data if present
         for attr_name in ["image", "video"]:
             if hasattr(tool_execution_response, attr_name):

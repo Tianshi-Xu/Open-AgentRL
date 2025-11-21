@@ -428,6 +428,18 @@ class RayPPOTrainer:
 
     def _dump_generations(self, inputs, outputs, gts, scores, reward_extra_infos_dict, dump_path):
         """Dump rollout/validation samples as JSONL."""
+        
+        def _convert_numpy_types(obj):
+            """Convert numpy types to Python native types for JSON serialization."""
+            if isinstance(obj, np.generic):
+                return obj.item()
+            elif isinstance(obj, dict):
+                return {k: _convert_numpy_types(v) for k, v in obj.items()}
+            elif isinstance(obj, (list, tuple)):
+                return [_convert_numpy_types(item) for item in obj]
+            else:
+                return obj
+        
         os.makedirs(dump_path, exist_ok=True)
         filename = os.path.join(dump_path, f"{self.global_steps}.jsonl")
 
@@ -447,7 +459,7 @@ class RayPPOTrainer:
         lines = []
         for i in range(n):
             entry = {k: v[i] for k, v in base_data.items()}
-            print("entry:", entry)
+            entry = _convert_numpy_types(entry)  # Convert numpy types before JSON serialization
             lines.append(json.dumps(entry, ensure_ascii=False))
 
         with open(filename, "w") as f:
@@ -1247,6 +1259,54 @@ class RayPPOTrainer:
                     batch = batch.repeat(repeat_times=self.config.actor_rollout_ref.rollout.n, interleave=True)
                     batch = batch.union(gen_batch_output)
 
+                    ### DEBUG ###
+                    # Handle UID inheritance for negative samples from rollback mechanism
+                    if "__negative_sample_parent_indices__" in batch.non_tensor_batch:
+                        import logging
+                        logger = logging.getLogger(__name__)
+                        
+                        parent_indices = batch.non_tensor_batch["__negative_sample_parent_indices__"]
+                        uids = batch.non_tensor_batch["uid"]
+                        
+                        # Find negative samples (parent_indices != -1)
+                        neg_mask = parent_indices != -1
+                        n_neg_samples = neg_mask.sum()
+                        
+                        if n_neg_samples > 0:
+                            logger.warning(
+                                f"\n{'='*70}\n"
+                                f"🔗 [UID INHERITANCE FOR NEGATIVE SAMPLES]\n"
+                                f"  Total negative samples: {n_neg_samples}\n"
+                                f"  Batch size after union: {len(batch)}\n"
+                                f"  Inheriting UIDs from parent samples for GRPO grouping\n"
+                                f"{'='*70}"
+                            )
+                            
+                            # Inherit UID from parent samples
+                            # parent_indices already contains the correct indices in the repeated batch
+                            for i, parent_idx in enumerate(parent_indices):
+                                if parent_idx != -1:  # This is a negative sample
+                                    # Simply inherit the UID from the parent at parent_idx
+                                    uids[i] = uids[parent_idx]
+                                    
+                            batch.non_tensor_batch["uid"] = uids
+                            
+                            # Verify: count how many unique UIDs negative samples have
+                            neg_uids = uids[neg_mask]
+                            unique_neg_uids = len(set(neg_uids))
+                            
+                            logger.warning(
+                                f"✅ UID inheritance complete\n"
+                                f"   Negative samples: {n_neg_samples}\n"
+                                f"   Unique parent UIDs: {unique_neg_uids}\n"
+                                f"   Negative samples now share UIDs with their parent prompts\n"
+                                f"   This ensures correct GRPO advantage grouping"
+                            )
+                        
+                        # Clean up the helper field
+                        del batch.non_tensor_batch["__negative_sample_parent_indices__"]
+                    ### DEBUG ###
+
                     if "response_mask" not in batch.batch.keys():
                         batch.batch["response_mask"] = compute_response_mask(batch)
                     # Balance the number of valid tokens across DP ranks.
@@ -1282,11 +1342,115 @@ class RayPPOTrainer:
                     )
 
                     rollout_corr_config = self.config.algorithm.get("rollout_correction", None)
+                    # ### begin verification block ###
+                    # # Verify bypass mode: optionally recompute to check consistency
+                    # verify_bypass = False  # Set to True to enable verification
+                    # bypass_mode = (
+                    #     rollout_corr_config and rollout_corr_config.get("bypass_old_logprob_for_rollout", False)
+                    # )
+                    
+                    # if verify_bypass and bypass_mode and "rollout_log_probs" in batch.batch:
+                    #     print("=" * 80, flush=True)
+                    #     print("BYPASS MODE VERIFICATION: Comparing rollout_log_probs with recomputed old_log_probs", flush=True)
+                    #     print("=" * 80, flush=True)
+                        
+                    #     # Store rollout_log_probs for comparison
+                    #     rollout_log_probs_original = batch.batch["rollout_log_probs"].clone()
+                        
+                    #     # Temporarily recompute old_log_probs
+                    #     with marked_timer("verify_old_log_prob", timing_raw, color="magenta"):
+                    #         recomputed = self.actor_rollout_wg.compute_log_prob(batch)
+                    #         recomputed_old_log_probs = recomputed.batch["old_log_probs"]
+                            
+                    #         # Compare the two
+                    #         response_mask = batch.batch["response_mask"]
+                    #         abs_diff = torch.abs(rollout_log_probs_original - recomputed_old_log_probs)
+                    #         masked_abs_diff = abs_diff * response_mask
+                            
+                    #         max_abs_diff = masked_abs_diff.max().item()
+                    #         mean_abs_diff = masked_mean(masked_abs_diff, response_mask).item()
+                            
+                    #         # Relative difference
+                    #         rel_diff = abs_diff / (torch.abs(rollout_log_probs_original) + 1e-10)
+                    #         masked_rel_diff = rel_diff * response_mask
+                    #         max_rel_diff = masked_rel_diff.max().item()
+                    #         mean_rel_diff = masked_mean(masked_rel_diff, response_mask).item()
+                            
+                    #         # Additional diagnostics
+                    #         print(f"Detailed Diagnostics:", flush=True)
+                    #         print(f"  - rollout_log_probs shape: {rollout_log_probs_original.shape}", flush=True)
+                    #         print(f"  - rollout_log_probs dtype: {rollout_log_probs_original.dtype}", flush=True)
+                    #         print(f"  - recomputed_old_log_probs dtype: {recomputed_old_log_probs.dtype}", flush=True)
+                    #         print(f"  - response_mask sum: {response_mask.sum().item()}", flush=True)
+                            
+                    #         # Check for NaN or Inf
+                    #         has_nan_rollout = torch.isnan(rollout_log_probs_original).any().item()
+                    #         has_nan_recomputed = torch.isnan(recomputed_old_log_probs).any().item()
+                    #         has_inf_rollout = torch.isinf(rollout_log_probs_original).any().item()
+                    #         has_inf_recomputed = torch.isinf(recomputed_old_log_probs).any().item()
+                            
+                    #         print(f"  - rollout has NaN: {has_nan_rollout}, Inf: {has_inf_rollout}", flush=True)
+                    #         print(f"  - recomputed has NaN: {has_nan_recomputed}, Inf: {has_inf_recomputed}", flush=True)
+                            
+                    #         # Sample values (first 10 valid tokens)
+                    #         valid_mask = response_mask.bool()
+                    #         if valid_mask.any():
+                    #             rollout_sample = rollout_log_probs_original[valid_mask][:10]
+                    #             recomputed_sample = recomputed_old_log_probs[valid_mask][:10]
+                    #             print(f"  - rollout_log_probs sample (first 10): {rollout_sample.tolist()}", flush=True)
+                    #             print(f"  - recomputed_old_log_probs sample (first 10): {recomputed_sample.tolist()}", flush=True)
+                            
+                    #         # Statistics on the values themselves
+                    #         rollout_masked = rollout_log_probs_original * response_mask
+                    #         recomputed_masked = recomputed_old_log_probs * response_mask
+                    #         print(f"  - rollout_log_probs: mean={masked_mean(rollout_masked, response_mask).item():.6f}, "
+                    #               f"min={rollout_masked[valid_mask].min().item():.6f}, "
+                    #               f"max={rollout_masked[valid_mask].max().item():.6f}", flush=True)
+                    #         print(f"  - recomputed_old_log_probs: mean={masked_mean(recomputed_masked, response_mask).item():.6f}, "
+                    #               f"min={recomputed_masked[valid_mask].min().item():.6f}, "
+                    #               f"max={recomputed_masked[valid_mask].max().item():.6f}", flush=True)
+                            
+                    #         # Check if they are close enough
+                    #         is_close = torch.allclose(
+                    #             rollout_log_probs_original * response_mask,
+                    #             recomputed_old_log_probs * response_mask,
+                    #             rtol=1e-3,
+                    #             atol=1e-5
+                    #         )
+                            
+                    #         print(f"\nVerification Results:", flush=True)
+                    #         print(f"  - Max absolute difference: {max_abs_diff:.6e}", flush=True)
+                    #         print(f"  - Mean absolute difference: {mean_abs_diff:.6e}", flush=True)
+                    #         print(f"  - Max relative difference: {max_rel_diff:.6e}", flush=True)
+                    #         print(f"  - Mean relative difference: {mean_rel_diff:.6e}", flush=True)
+                    #         print(f"  - torch.allclose (rtol=1e-3, atol=1e-5): {is_close}", flush=True)
+                            
+                    #         if not is_close:
+                    #             print(f"\n⚠️  WARNING: rollout_log_probs and recomputed old_log_probs differ significantly!", flush=True)
+                    #             print(f"Possible causes:", flush=True)
+                    #             print(f"  1. Model was updated between rollout and recomputation", flush=True)
+                    #             print(f"  2. Dropout/random layers are active (should be in eval mode)", flush=True)
+                    #             print(f"  3. Different precision (BF16 vs FP32)", flush=True)
+                    #             print(f"  4. Implementation mismatch between rollout and actor workers", flush=True)
+                    #             print(f"  5. Temperature or sampling parameters differ", flush=True)
+                    #         else:
+                    #             print(f"\n✓ Verification PASSED: rollout_log_probs ≈ recomputed old_log_probs", flush=True)
+                            
+                    #         # Log metrics
+                    #         metrics["bypass_verify/max_abs_diff"] = max_abs_diff
+                    #         metrics["bypass_verify/mean_abs_diff"] = mean_abs_diff
+                    #         metrics["bypass_verify/max_rel_diff"] = max_rel_diff
+                    #         metrics["bypass_verify/mean_rel_diff"] = mean_rel_diff
+                    #         metrics["bypass_verify/is_close"] = float(is_close)
+                            
+                    #     print("=" * 80, flush=True)
+                    # ### end verification block ###
                     need_recomputation = maybe_apply_rollout_correction(
                         batch=batch,
                         rollout_corr_config=rollout_corr_config,
                         policy_loss_config=self.config.actor_rollout_ref.actor.policy_loss,
                     )
+                    print("need computation:",need_recomputation,flush=True)
                     print(f"Rollout correction time: {time.perf_counter() - time_start:.2f} seconds",flush=True)
                     time_start = time.perf_counter()
                     if need_recomputation:
@@ -1349,7 +1513,7 @@ class RayPPOTrainer:
                         # This corrects for off-policy issues (policy mismatch, model staleness, etc.)
                         # Also computes off-policy diagnostic metrics (KL, PPL, etc.)
                         if rollout_corr_config is not None and "rollout_log_probs" in batch.batch:
-                            batch, is_metrics = compute_rollout_correction_and_add_to_batch(batch)
+                            batch, is_metrics = compute_rollout_correction_and_add_to_batch(batch, rollout_corr_config)
                             # IS and off-policy metrics already have rollout_corr/ prefix
                             metrics.update(is_metrics)
 
@@ -1386,6 +1550,7 @@ class RayPPOTrainer:
                         # update actor
                         with marked_timer("update_actor", timing_raw, color="red"):
                             batch.meta_info["multi_turn"] = self.config.actor_rollout_ref.rollout.multi_turn.enable
+                            batch.meta_info["temperature"] = self.config.actor_rollout_ref.rollout.temperature
                             actor_output = self.actor_rollout_wg.update_actor(batch)
                         actor_output_metrics = reduce_metrics(actor_output.meta_info["metrics"])
                         metrics.update(actor_output_metrics)

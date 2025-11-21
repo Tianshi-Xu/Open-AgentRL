@@ -187,6 +187,12 @@ multi_turn:
     - "IndentationError"
     # - "tool call format is wrong"
 
+  # Save failed tool call trajectories as negative samples
+  save_negative_samples: false
+
+  # Maximum number of negative samples to save per group (to avoid overwhelming the batch)
+  max_negative_samples_per_group: 1
+
   # null for no interaction
   interaction_config_path: null
 

@@ -68,6 +68,10 @@ class MultiTurnConfig(BaseConfig):
         "NameError",
         "tool call format is wrong"
     ])
+    
+    # Negative sample configuration
+    save_negative_samples: bool = False
+    max_negative_samples_per_group: int = 1
 
 
 @dataclass

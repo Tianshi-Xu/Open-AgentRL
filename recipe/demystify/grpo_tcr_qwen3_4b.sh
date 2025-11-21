@@ -152,11 +152,11 @@ fi
     trainer.project_name=$project_name \
     trainer.experiment_name=$experiment_name \
     trainer.n_gpus_per_node=$num_GPU \
-    trainer.val_before_train=False \
+    trainer.val_before_train=True \
     trainer.log_val_generations=20 \
     trainer.validation_data_dir=$VAL_SAVE_PATH \
     trainer.nnodes=1 \
-    trainer.save_freq=30 \
+    trainer.save_freq=10 \
     trainer.default_local_dir=$default_local_dir \
     trainer.test_freq=10 \
     trainer.total_epochs=3 $@ \
@@ -173,7 +173,9 @@ fi
     actor_rollout_ref.rollout.multi_turn.enable_tool_rollback=True \
     actor_rollout_ref.rollout.multi_turn.max_tool_retries=3 \
     +trainer.filter_zero_advantage_samples=False \
-    actor_rollout_ref.rollout.over_sample_rate=0.1 \
+    +algorithm.rollout_correction.bypass_old_logprob_for_rollout=True \
+    actor_rollout_ref.rollout.calculate_log_probs=True \
+    # actor_rollout_ref.rollout.over_sample_rate=0.1 \
     # actor_rollout_ref.actor.optim.lr_warmup_steps=10 \
     # actor_rollout_ref.rollout.over_sample_rate=0.2 \
     # +actor_rollout_ref.rollout.engine_kwargs.vllm.kv_cache_dtype=fp8
